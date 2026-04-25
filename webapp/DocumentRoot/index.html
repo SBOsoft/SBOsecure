@@ -29,268 +29,355 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
     <!--script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.13/vue.global.prod.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script-->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.5.13/vue.global.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.6.0/echarts.min.js" integrity="sha512-XSmbX3mhrD2ix5fXPTRQb2FwK22sRMVQTpBP2ac8hX7Dh/605hA2QDegVWiAvZPiXIxOV0CbkmUjGionDpbCmw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <link rel="stylesheet" href="sbosecure.css">
 
-<script>
-        /**
-         * 
-         * @param {type} text
-         * @param {type} filename
-         * @param {type} mimeType
-         * @returns {undefined}
-         */
-    function SBO_SaveAsFile(text, filename, mimeType){
-
-        // Create a Blob containing the text content
-        // Blob is a file-like object of immutable, raw data.
-        // It can be used to generate a URL.
+    <script>
+    function SBO_SaveAsFile(text, filename, mimeType) {
         const blob = new Blob([text], { type: mimeType || 'application/octet-stream' });
-
-        // Create a URL for the Blob object
-        const url = URL.createObjectURL(blob);
-
-        // Create a temporary anchor element to trigger the download
-        const a = document.createElement('a');
-        a.style.display = 'none'; // Hide the element
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.style.display = 'none';
         a.href = url;
-        a.download = filename; // Set the default filename
-
-        // Append the anchor to the body, simulate a click, and then remove it
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
-        
-        // Clean up by revoking the object URL and removing the anchor element
         window.setTimeout(() => {
-                        window.URL.revokeObjectURL(url);
-                        document.body.removeChild(a);
-                    }, 100);
-        
-    }  
-    
-    function SBO_FormatTimestampSeconds(tsSeconds){
-        if(!tsSeconds){
-            return '';
-        }
-        let d = new Date(tsSeconds*1000);
-        return d.toLocaleDateString() + ' ' + d.getHours() + ':' + d.getMinutes();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        }, 100);
     }
 
+    function SBO_FormatTimestampSeconds(tsSeconds) {
+        if (!tsSeconds) return '';
+        const d = new Date(tsSeconds * 1000);
+        return d.toLocaleDateString() + ' ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
     </script>
     <script src="crypto.js"></script>
     <script src="crypto-utils.js"></script>
     <script src="ui.js"></script>
-    <link rel="stylesheet" href="sbosecure.css">
-    
 </head>
 <body>
-    <main class="my-2 min-vh-50 p-2" id="app">    
-        <nav class="navbar navbar-expand-lg shadow-sm" id="topNavbar">
-            <div class="container-fluid">
-                <div>
-                    <a class="me-2" href="#" v-on:click="showKeysTab()" title="My keys">Keys</a>
 
-                    <a class="" href="#" v-on:click="showMainTab()" title="Encrypt or decrypt stuff">Encrypt/Decrypt</a>
+<div id="app">
+
+    <!-- ── Header ───────────────────────────────────────────── -->
+    <header class="sbo-topbar">
+        <span class="sbo-brand">SBO<strong>secure</strong></span>
+        <div class="sbo-key-pill" v-bind:class="{'has-key': myKeys.length > 0}">
+            <i class="bi" v-bind:class="myKeys.length > 0 ? 'bi-key-fill' : 'bi-key'"></i>
+            <span v-if="myKeys.length > 0">{{ myKeys[0].downloadable.name }}</span>
+            <span v-else>No key loaded</span>
+        </div>
+    </header>
+
+    <!-- ── Material tabs ────────────────────────────────────── -->
+    <nav class="sbo-nav" id="topNavbar">
+        <a class="sbo-nav-link" href="#"
+            v-bind:class="{active: activeTab.startsWith('keys')}"
+            v-on:click.prevent="switchActiveTab('keys')">
+            <i class="bi bi-key"></i> My Keys
+        </a>
+        <a class="sbo-nav-link" href="#"
+            v-bind:class="{active: activeTab === 'encrypt'}"
+            v-on:click.prevent="switchActiveTab('encrypt')">
+            <i class="bi bi-lock-fill"></i> Encrypt
+        </a>
+        <a class="sbo-nav-link" href="#"
+            v-bind:class="{active: activeTab === 'decrypt'}"
+            v-on:click.prevent="switchActiveTab('decrypt')">
+            <i class="bi bi-unlock-fill"></i> Decrypt
+        </a>
+        <a class="sbo-nav-link" href="#"
+            v-bind:class="{active: activeTab === 'contacts'}"
+            v-on:click.prevent="switchActiveTab('contacts')">
+            <i class="bi bi-people-fill"></i> Contacts
+            <span class="sbo-nav-count" v-if="myContacts.filter(c=>c).length > 0">
+                {{ myContacts.filter(c => c).length }}
+            </span>
+        </a>
+        <div class="sbo-nav-sep"></div>
+        <a class="sbo-nav-link" href="#"
+            v-bind:class="{active: activeTab === 'pbkdf'}"
+            v-on:click.prevent="switchActiveTab('pbkdf')">
+            Password Enc.
+        </a>
+        <a class="sbo-nav-link" href="#"
+            v-bind:class="{active: activeTab === 'base64'}"
+            v-on:click.prevent="switchActiveTab('base64')">
+            Base64
+        </a>
+    </nav>
+
+    <!-- ── Page content ─────────────────────────────────────── -->
+    <main class="sbo-main">
+
+        <!-- ===== MY KEYS ===================================== -->
+        <div v-show="activeTab.startsWith('keys')">
+
+            <!-- Empty state -->
+            <div v-if="myKeys.length === 0 && activeTab === 'keys'">
+                <div class="sbo-card">
+                    <div class="sbo-empty">
+                        <i class="bi bi-shield-lock sbo-empty-icon"></i>
+                        <div class="sbo-empty-title">No key loaded</div>
+                        <p class="sbo-empty-desc">
+                            Load your key set or create a new one to get started.
+                            You need a key to sign encrypted files and to receive
+                            encrypted messages.
+                        </p>
+                        <div class="sbo-btn-row justify-content-center">
+                            <button class="btn btn-primary"
+                                v-on:click="switchActiveTab('keys.load')">
+                                <i class="bi bi-folder2-open me-1"></i> Load key
+                            </button>
+                            <button class="btn btn-secondary"
+                                v-on:click="switchActiveTab('keys.new')">
+                                <i class="bi bi-plus-circle me-1"></i> Create new key
+                            </button>
+                        </div>
+                    </div>
                 </div>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
-                <div class="" id="navbarNav">
-                    <ul class="navbar-nav ms-auto">
-                        <li class="nav-item">
-                            <a class="nav-link" href="https://www.sbosoft.net/sbosecure.html" title="SBOsecure proper security for ordinary people" target="_blank">SBOsecure</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="https://www.sbosoft.net">SBOSOFT</a>
-                        </li>
+            </div>
+
+            <!-- Loaded keys -->
+            <div v-if="myKeys.length > 0">
+                <div class="sbo-card">
+                    <div class="sbo-card-hd">Loaded keys</div>
+                    <div class="sbo-card-body">
+                        <div v-for="akey in myKeys" class="sbo-key-row">
+                            <div class="sbo-key-avatar">
+                                <i class="bi bi-key-fill"></i>
+                            </div>
+                            <div class="flex-fill">
+                                <div class="sbo-key-name">{{ akey.downloadable.name }}</div>
+                                <div class="sbo-key-meta">
+                                    Created {{ printKeyCreated(akey.downloadable.created) }}
+                                </div>
+                                <div class="sbo-key-downloads">
+                                    <span class="sbo-key-dl-label">Public key</span>
+                                    <sbo-down-item
+                                        v-bind:item-data="JSON.stringify(akey.jwks.public)"
+                                        file-name="public.jwks.json"
+                                        mime-type="application/json">
+                                    </sbo-down-item>
+                                    <span class="sbo-key-dl-label" style="margin-left:8px">Keyset</span>
+                                    <sbo-down-item
+                                        v-bind:item-data="JSON.stringify(akey.downloadable)"
+                                        v-bind:file-name="(akey.downloadable.name || 'SBOsecure') + '-keyset.json'"
+                                        mime-type="application/json">
+                                    </sbo-down-item>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sbo-btn-row">
+                    <button class="btn btn-secondary"
+                        v-on:click="switchActiveTab('keys.load')">
+                        Load another key
+                    </button>
+                    <button class="btn btn-secondary"
+                        v-on:click="switchActiveTab('keys.new')">
+                        Create new key
+                    </button>
+                </div>
+
+                <div class="sbo-tip">
+                    <i class="bi bi-info-circle-fill"></i>
+                    Share the <strong>Public key</strong> with contacts so they can send you encrypted files.
+                    Keep the <strong>Keyset</strong> private — it contains your private signing and decryption keys.
+                </div>
+            </div>
+
+            <!-- Load key sub-panel -->
+            <div v-show="activeTab === 'keys.load'" class="sbo-card mt-4">
+                <div class="sbo-card-hd">Load a key</div>
+                <div class="sbo-card-body">
+                    <sbo-load-mykeys-form
+                        v-bind:keys-loaded-callback="handleMyKeysLoaded">
+                    </sbo-load-mykeys-form>
+                </div>
+            </div>
+
+            <!-- Create new key sub-panel -->
+            <div v-show="activeTab === 'keys.new'" class="sbo-card mt-4">
+                <div class="sbo-card-hd">Create a new key</div>
+                <div class="sbo-card-body">
+                    <sbo-createnewkeys-form
+                        v-bind:keys-created-callback="handleMyNewKeysCreated">
+                    </sbo-createnewkeys-form>
+                </div>
+            </div>
+
+        </div><!-- /keys -->
+
+
+        <!-- ===== ENCRYPT ===================================== -->
+        <div v-show="activeTab === 'encrypt'">
+            <div v-if="myKeys.length === 0" class="alert alert-warning mb-3">
+                <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                Load your keys first so the encrypted package can be signed.
+                <a href="#" v-on:click.prevent="switchActiveTab('keys')"
+                   class="ms-1 fw-bold" style="color:inherit">
+                    Go to My Keys →
+                </a>
+            </div>
+            <div class="sbo-card">
+                <div class="sbo-card-hd">Encrypt</div>
+                <div class="sbo-card-body">
+                    <sbo-encrypt-form
+                        v-bind:my-keys="myKeys"
+                        v-bind:my-contacts="myContacts">
+                    </sbo-encrypt-form>
+                </div>
+            </div>
+        </div><!-- /encrypt -->
+
+
+        <!-- ===== DECRYPT ===================================== -->
+        <div v-show="activeTab === 'decrypt'">
+            <div v-if="myKeys.length === 0" class="alert alert-warning mb-3">
+                <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                Load your keys first to be able to decrypt.
+                <a href="#" v-on:click.prevent="switchActiveTab('keys')"
+                   class="ms-1 fw-bold" style="color:inherit">
+                    Go to My Keys →
+                </a>
+            </div>
+            <div class="sbo-card">
+                <div class="sbo-card-hd">Decrypt</div>
+                <div class="sbo-card-body">
+                    <sbo-decrypt-form v-bind:my-keys="myKeys"></sbo-decrypt-form>
+                </div>
+            </div>
+        </div><!-- /decrypt -->
+
+
+        <!-- ===== CONTACTS ==================================== -->
+        <div v-show="activeTab === 'contacts'">
+
+            <!-- Add / Edit form -->
+            <div v-if="showingContactForm" class="sbo-card">
+                <div class="sbo-card-hd">
+                    {{ currentEditedContactIndex > -1 ? 'Edit contact' : 'Add contact' }}
+                </div>
+                <div class="sbo-card-body">
+                    <sbo-contact-form
+                        v-bind:contact="currentEditedContact"
+                        v-bind:contact-index="currentEditedContactIndex"
+                        v-bind:save-contact-callback="saveContactCallback">
+                    </sbo-contact-form>
+                </div>
+            </div>
+
+            <!-- Empty state -->
+            <div v-if="!showingContactForm && myContacts.filter(c=>c).length === 0">
+                <div class="sbo-card">
+                    <div class="sbo-empty">
+                        <i class="bi bi-person-lines-fill sbo-empty-icon"></i>
+                        <div class="sbo-empty-title">No contacts yet</div>
+                        <p class="sbo-empty-desc">
+                            Add a contact by loading their <strong>public.jwks.json</strong>
+                            or import a contacts file.
+                        </p>
+                        <div class="sbo-btn-row justify-content-center">
+                            <button class="btn btn-primary" v-on:click="showAddContactForm()">
+                                <i class="bi bi-person-plus me-1"></i> Add contact
+                            </button>
+                            <label class="btn btn-secondary mb-0">
+                                <i class="bi bi-upload me-1"></i> Import from file
+                                <input type="file" accept=".json" class="d-none"
+                                    v-on:change="importContactsFromFile">
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Contact list -->
+            <div v-if="!showingContactForm && myContacts.filter(c=>c).length > 0">
+                <div class="sbo-btn-row mb-3">
+                    <button class="btn btn-primary" v-on:click="showAddContactForm()">
+                        <i class="bi bi-person-plus me-1"></i> Add
+                    </button>
+                    <label class="btn btn-secondary mb-0">
+                        <i class="bi bi-upload me-1"></i> Import
+                        <input type="file" accept=".json" class="d-none"
+                            v-on:change="importContactsFromFile">
+                    </label>
+                    <button class="btn btn-secondary ms-auto"
+                        v-on:click="downloadContacts">
+                        <i class="bi bi-download me-1"></i> Download all
+                    </button>
+                </div>
+
+                <div class="sbo-card">
+                    <ul class="list-group list-group-flush">
+                        <template v-for="(cont, cindex) in myContacts">
+                            <li v-if="cont !== null" class="list-group-item">
+                                <sbo-contact
+                                    v-bind:contact="cont"
+                                    v-bind:contact-index="cindex"
+                                    v-bind:edit-contact-cb="showEditContactForm"
+                                    v-bind:delete-contact-cb="deleteContactCallback">
+                                </sbo-contact>
+                            </li>
+                        </template>
                     </ul>
                 </div>
-            </div>
-        </nav>
-        <ul class="nav nav-tabs">
-            <li class="nav-item">
-                <a :class="{'nav-link':!activeTab.startsWith('keys'), 'nav-link active':activeTab.startsWith('keys')}" :aria-current="activeTab=='keys'?'page':false" href="#" v-on:click.prevent="switchActiveTab('keys')">My keys</a>
-            </li>
-            <li class="nav-item">
-                <a :class="{'nav-link':!activeTab.startsWith('encrypt'), 'nav-link active':activeTab.startsWith('encrypt')}" :aria-current="activeTab==='encrypt'?'page':false" href="#" v-on:click.prevent="switchActiveTab('encrypt')">Encrypt</a>
-            </li>
-            <li class="nav-item">
-                <a :class="{'nav-link':!activeTab.startsWith('decrypt'), 'nav-link active':activeTab.startsWith('decrypt')}" :aria-current="activeTab==='decrypt'?'page':false" href="#" v-on:click.prevent="switchActiveTab('decrypt')">Decrypt</a>
-            </li>
-            <li class="nav-item">
-                <a :class="{'nav-link':activeTab!=='contacts', 'nav-link active':activeTab==='contacts'}" :aria-current="activeTab==='contacts'?'page':false" href="#" v-on:click.prevent="switchActiveTab('contacts')">Contacts</a>
-            </li>
-            <li class="nav-item">
-                <a :class="{'nav-link':activeTab!=='pbkdf', 'nav-link active':activeTab==='pbkdf'}" :aria-current="activeTab==='pbkdf'?'page':false" href="#" v-on:click.prevent="switchActiveTab('pbkdf')">Password based encryption/decryption</a>
-            </li>
-            <li class="nav-item">
-                <a :class="{'nav-link':activeTab!=='base64', 'nav-link active':activeTab==='base64'}" :aria-current="activeTab==='base64'?'page':false" href="#" v-on:click.prevent="switchActiveTab('base64')">Base64 tools</a>
-            </li>
-        </ul>
-        <div class="row">
-            <div class="col-12 col-md-10 col-lg-8 py-2 px-4">
-                <div :class="{'d-none':!activeTab.startsWith('keys'), 'd-block':activeTab.startsWith('keys')}">
-                    <div v-if="myKeys.length>0">
-                        Loaded keys:
-                        <ul>
-                            <li v-for="akey in (myKeys)">{{ akey.downloadable.name }}
-                                <span class="text-secondary">(Created: {{ printKeyCreated(akey.downloadable.created) }})</span>
-                                <br>
-                                Public key
-                                <sbo-down-item v-bind:item-data="JSON.stringify(akey.jwks.public)" file-name="public.jwks.json"></sbo-down-item>
-                                <div class="small text-secondary">Share the public key with others to receive encrypted files</div>
-                                Key (encrypted)
-                                <sbo-down-item v-bind:item-data="JSON.stringify(akey.downloadable)" v-bind:file-name="(akey.downloadable.name || 'SBOsecure') + '-keyset.json'" mime-type="application/json"></sbo-down-item>
-                                <div class="small text-secondary">Keep this private — you need the password and secret number to open it</div>
-                            </li>
-                        </ul>
-                        <div>
-                            Ready to encrypt/decrypt data
-                        </div>
-                    </div>
-                    <div class="alert alert-light" v-if="!myKeys || myKeys.length<1">
-                        No keys loaded
-                    </div>
-                    <div class="my-2">
-                        <button class="btn btn-primary me-2" v-on:click="activeTab='keys.load'">Load</button>
-                        <button class="btn btn-secondary" v-on:click="activeTab='keys.new'">Create new</button>
-                    </div>
-                    <div v-bind:class="{'d-none':activeTab!=='keys.load', 'd-block card':activeTab==='keys.load'}">
-                        <div class="card-header">
-                            Load a key
-                        </div>
-                        <div class="card-body">
-                            <sbo-load-mykeys-form v-bind:keys-loaded-callback="handleMyKeysLoaded"></sbo-load-mykeys-form>
-                        </div>
-                    </div>
-                    <div v-bind:class="{'d-none':activeTab!=='keys.new', 'd-block card':activeTab==='keys.new'}">
-                        <div class="card-header">
-                            Create a new key
-                        </div>
-                        <div class="card-body">
-                            <sbo-createnewkeys-form v-bind:keys-created-callback="handleMyNewKeysCreated"></sbo-createnewkeys-form>
-                        </div>
-                    </div>
-                    <div class="text-secondary small">
-                        <ul>
-                            <li>Load keys or create a new key</li>
-                            <li>You will need keys to sign files/data and to receive encrypted files from others</li>
-                            <li>Don't forget to save and backup your keys</li>
-                        </ul>
-                    </div>
-                </div>
-                <div v-bind:class="{'d-none':activeTab!=='encrypt', 'd-block':activeTab==='encrypt'}">
-                    <div class="card">
-                        <div class="card-header">
-                            Encrypt
-                        </div>
-                        <div class="card-body">
-                            <sbo-encrypt-form v-bind:my-keys="myKeys" v-bind:my-contacts="myContacts"></sbo-encrypt-form>
-                        </div>
-                    </div>
-                </div>
-                <div v-bind:class="{'d-none':activeTab!=='decrypt', 'd-block':activeTab==='decrypt'}">
-                    <div class="card">
-                        <div class="card-header">
-                            Decrypt
-                        </div>
-                        <div class="card-body">
-                            <sbo-decrypt-form v-bind:my-keys="myKeys"></sbo-decrypt-form>
-                        </div>
-                    </div>
-                </div>
-                <div v-bind:class="{'d-none':activeTab!=='contacts', 'd-block':activeTab==='contacts'}">
-                    <div class="card">
-                        <div class="card-header">
-                            Contacts
-                        </div>
-                        <div class="card-body">
-                            <div v-if="!showingContactForm" class="d-flex gap-2 mb-2">
-                                <button type="button" v-on:click="showAddContactForm()" class="btn btn-sm btn-outline-light">
-                                    <img src="img/plus.svg" border="0"> Add
-                                </button>
-                                <label class="btn btn-sm btn-outline-light mb-0">
-                                    <img src="img/download.svg" border="0"> Import from file
-                                    <input type="file" accept=".json" class="d-none" v-on:change="importContactsFromFile">
-                                </label>
-                            </div>
-                            <div v-if="showingContactForm">
-                                <sbo-contact-form v-bind:contact="currentEditedContact" v-bind:contact-index="currentEditedContactIndex" v-bind:save-contact-callback="saveContactCallback"></sbo-contact-form>
-                            </div>
-                            <ul class="list-group mb-4 list-group-flush">
-                                <template v-for="(cont, cindex) in myContacts">
-                                <li v-if="cont!==null" class="list-group-item list-group-item-action">
-                                    <sbo-contact v-bind:contact="cont" v-bind:contact-index="cindex" v-bind:edit-contact-cb="showEditContactForm" v-bind:delete-contact-cb="deleteContactCallback"></sbo-contact>
-                                </li>
-                                </template>
-                            </ul>
-                            <button type="button" v-on:click="downloadContacts" class="btn btn-sm btn-outline-light">
-                                <img src="img/download.svg" border="0"> Download
-                            </button>
-                            You must download and save contacts, they are not automatically saved
-                        </div>
-                    </div>
-                </div>
-                <div v-bind:class="{'d-none':activeTab!=='pbkdf', 'd-block':activeTab==='pbkdf'}">
-                    <div class="card">
-                        <div class="card-header">
-                            PBKDF2
-                        </div>
-                        <div class="card-body">                    
-                            <sbo-pbkdf-form></sbo-pbkdf-form>
-                        </div>
-                    </div>
-                </div>
-                <div :class="{'d-none':activeTab!=='base64', 'd-block':activeTab==='base64'}">
-                    <div class="card">
-                        <div class="card-header">
-                            Base64
-                        </div>
-                        <div class="card-body">                            
-                            <sbo-base64-form></sbo-base64-form>
-                        </div>
-                    </div>
+
+                <div class="sbo-tip mt-2">
+                    <i class="bi bi-info-circle-fill"></i>
+                    Contacts are stored in memory only. Download to save between sessions.
                 </div>
             </div>
-        </div>
+
+        </div><!-- /contacts -->
+
+
+        <!-- ===== PASSWORD ENC ================================ -->
+        <div v-show="activeTab === 'pbkdf'">
+            <div class="sbo-card">
+                <div class="sbo-card-hd">Password-based encryption / decryption</div>
+                <div class="sbo-card-body">
+                    <sbo-pbkdf-form></sbo-pbkdf-form>
+                </div>
+            </div>
+        </div><!-- /pbkdf -->
+
+
+        <!-- ===== BASE64 ====================================== -->
+        <div v-show="activeTab === 'base64'">
+            <div class="sbo-card">
+                <div class="sbo-card-hd">Base64 tools</div>
+                <div class="sbo-card-body">
+                    <sbo-base64-form></sbo-base64-form>
+                </div>
+            </div>
+        </div><!-- /base64 -->
+
     </main>
-    
-    <footer class="pt-4 my-md-5 pt-md-5 border-top border-primary-subtle">
-        <div class="container-fluid">
-            <div class="my-2 text-center text-secondary small">                        
-                SBOsecure allows you to encrypt/decrypt and sign/verify files and text easily, 
-                using only functionality provided by modern browsers.
-                It is technically secure enough and also easy to use for ordinary people. 
-                <br>
-                All processing takes place in your browser, locally. 
-                No data leaves your browser, there is no server side component or code. 
-                <br>
-                You can download the source files from github and deploy it on your own servers, devices.
-                You just need to access the web page over a https connection.
-                <br>
-                It may not be suitable for use with large files, 
-                but files up to 10-20MBs should work fine on a recent device.
-            </div>
-            <div class="row">
-                <div class="col-12 col-md">
-                    <div class="my-2 text-center text-secondary">                        
-                        See 
-                        <a href="https://github.com/SBOsoft/SBOsecure" title="SBOsecure at github"><i class="bi bi-github"></i> SBOsecure</a>                        
-                        for latest updates and documentation
-                    </div>                   
-                </div>                
-            </div>
-        </div>
+
+    <!-- ── Footer ────────────────────────────────────────────── -->
+    <footer class="sbo-footer">
+        All processing happens locally in your browser — no data is sent to any server.
+        <br>
+        <a href="https://github.com/SBOsoft/SBOsecure" target="_blank">
+            <i class="bi bi-github"></i> SBOsoft/SBOsecure
+        </a>
+        &nbsp;·&nbsp;
+        <a href="https://www.sbosoft.net" target="_blank">SBOSOFT</a>
     </footer>
-    
+
+</div><!-- /app -->
+
 <script>
     const app = Vue.createApp({
-        components:{
-
-        },
-        // Data properties for the component
         data() {
-            return {                    
-                activeTab:'keys',
+            return {
+                activeTab: 'keys',
                 myKeys: [],
                 myContacts: [],
                 showingContactForm: false,
@@ -298,89 +385,58 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 currentEditedContactIndex: -1
             };
         },
-        mounted() {
-        },            
-        beforeMount() {
-        },
-        computed:{           
-        },
         methods: {
-            switchActiveTab(tab){
-                console.log("before", this.activeTab);
-                this.activeTab=tab;
-                console.log("after", this.activeTab);
-            },
-            
-            scrollToTop(){
-                this.$nextTick(()=>{
-                   document.getElementById('topNavbar').scrollIntoView(true); 
-                });                
-            },
-            showKeysTab() {
-                
-            },
-            showMainTab(){
-                
-            },
-            toggleNewKeyPassword(){
-                this.newKeyPasswordVisible = !this.newKeyPasswordVisible;
-            },
-            toggleLoadKeyPassword(){
-                this.loadKeyPasswordVisible = !this.loadKeyPasswordVisible;
-            },
-            importKey(jwk){
-                
-            },
-            handleMyKeysLoaded(keysAsEncrypted, keysAsJwks){
-                this.myKeys.push({downloadable: keysAsEncrypted, jwks: keysAsJwks});
-                this.activeTab='keys';
+            switchActiveTab(tab) {
+                this.activeTab = tab;
                 this.scrollToTop();
-                console.log(this.myKeys);
             },
-            handleMyNewKeysCreated(keysAsEncrypted, keysAsJwks){
-                this.myKeys.push({downloadable: keysAsEncrypted, jwks: keysAsJwks});
-                this.activeTab='keys';
-                this.scrollToTop();
-                console.log(this.myKeys);
+            scrollToTop() {
+                this.$nextTick(() => {
+                    document.getElementById('topNavbar').scrollIntoView({ behavior: 'smooth' });
+                });
             },
-            printKeyCreated(ts){
+            showKeysTab() { this.switchActiveTab('keys'); },
+            showMainTab() { this.switchActiveTab('encrypt'); },
+            handleMyKeysLoaded(keysAsEncrypted, keysAsJwks) {
+                this.myKeys.push({ downloadable: keysAsEncrypted, jwks: keysAsJwks });
+                this.switchActiveTab('keys');
+            },
+            handleMyNewKeysCreated(keysAsEncrypted, keysAsJwks) {
+                this.myKeys.push({ downloadable: keysAsEncrypted, jwks: keysAsJwks });
+                this.switchActiveTab('keys');
+            },
+            printKeyCreated(ts) {
                 return SBO_FormatTimestampSeconds(ts);
             },
-            showAddContactForm(){
+            showAddContactForm() {
                 this.currentEditedContact = {};
                 this.currentEditedContactIndex = -1;
                 this.showingContactForm = true;
             },
-            showEditContactForm(contact, indexInMyContacts){
+            showEditContactForm(contact, indexInMyContacts) {
                 this.currentEditedContact = contact;
                 this.currentEditedContactIndex = indexInMyContacts;
                 this.showingContactForm = true;
             },
-            deleteContactCallback(index){
+            deleteContactCallback(index) {
                 this.myContacts.splice(index, 1);
             },
-            saveContactCallback(contact, index){
-                if(contact){
-                    if(index>-1){
-                        this.myContacts[index] = contact;                        
-                    }
-                    else{
+            saveContactCallback(contact, index) {
+                if (contact) {
+                    if (index > -1) {
+                        this.myContacts[index] = contact;
+                    } else {
                         this.myContacts.push(contact);
                     }
                 }
-                console.log("myContacts", this.myContacts);
                 this.currentEditedContact = {};
                 this.currentEditedContactIndex = -1;
                 this.showingContactForm = false;
             },
-            downloadContacts(){
+            downloadContacts() {
                 SBO_SaveAsFile(JSON.stringify(this.myContacts), 'contacts.json', 'application/json');
             },
-            /**
-             * Imports contacts from a JSON file.
-             * Accepts an array of contact objects or a single contact object.
-             */
-            importContactsFromFile(event){
+            importContactsFromFile(event) {
                 const file = event.target.files[0];
                 if (!file) return;
                 const reader = new FileReader();
@@ -395,9 +451,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                                 added++;
                             }
                         }
-                        if (added === 0) {
-                            alert('No valid contacts found in file.');
-                        }
+                        if (added === 0) alert('No valid contacts found in file.');
                     } catch {
                         alert('Could not parse contacts file.');
                     }
@@ -405,21 +459,20 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 };
                 reader.readAsText(file);
             }
-            
         }
     });
-    app.component('sbo-down-item', DownloadableItem);
-    app.component('sbo-pbkdf-form', PBKDFEncryptDecrypt);
-    app.component('sbo-base64-form', Base64Form);
-    app.component('sbo-load-mykeys-form', LoadMyKeysForm);
-    app.component('sbo-createnewkeys-form', CreateNewKeysForm);
-    app.component('sbo-contact', ContactInfo);
-    app.component('sbo-contact-form', ContactForm);
-    app.component('sbo-encrypt-form', EncryptForm);
-    app.component('sbo-decrypt-form', DecryptForm);
 
-    // Mount the Vue application to the DOM element with id="app"
+    app.component('sbo-down-item',          DownloadableItem);
+    app.component('sbo-pbkdf-form',         PBKDFEncryptDecrypt);
+    app.component('sbo-base64-form',         Base64Form);
+    app.component('sbo-load-mykeys-form',   LoadMyKeysForm);
+    app.component('sbo-createnewkeys-form', CreateNewKeysForm);
+    app.component('sbo-contact',            ContactInfo);
+    app.component('sbo-contact-form',       ContactForm);
+    app.component('sbo-encrypt-form',       EncryptForm);
+    app.component('sbo-decrypt-form',       DecryptForm);
+
     app.mount('#app');
-</script>    
+</script>
 </body>
 </html>

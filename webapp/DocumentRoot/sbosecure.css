@@ -17,22 +17,552 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-* {
-    font-size: 15px;
+/* ============================================================
+   Material / Google design — SBOsecure
+   ============================================================ */
+
+:root {
+    --c-primary:      #1a73e8;
+    --c-primary-dk:   #1557b0;
+    --c-primary-bg:   #e8f0fe;
+    --c-primary-bg2:  #d2e3fc;
+    --c-white:        #ffffff;
+    --c-bg:           #f8f9fa;
+    --c-surface:      #ffffff;
+    --c-outline:      #dadce0;
+    --c-outline-dk:   #bdc1c6;
+    --c-text:         #202124;
+    --c-text-2:       #5f6368;
+    --c-text-3:       #80868b;
+    --c-green:        #188038;
+    --c-green-bg:     #e6f4ea;
+    --c-red:          #d93025;
+    --c-red-bg:       #fce8e6;
+    --c-yellow:       #e37400;
+    --c-yellow-bg:    #fef7e0;
+
+    /* Material elevation shadows */
+    --elev-1: 0 1px 2px rgba(60,64,67,.3), 0 1px 3px 1px rgba(60,64,67,.15);
+    --elev-2: 0 1px 2px rgba(60,64,67,.3), 0 2px 6px 2px rgba(60,64,67,.15);
+
+    --r-xs:   4px;
+    --r-sm:   8px;
+    --r-md:   12px;
+    --r-pill: 24px;
+
+    /* Roboto is on Android/Chrome OS; falls back to system-ui elsewhere */
+    --c-font: Roboto, 'Google Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --c-mono: 'Roboto Mono', ui-monospace, 'Cascadia Mono', monospace;
+    --c-max-w: 720px;
 }
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
 
 body {
-    font-family: sans-serif;
-    /*background-color: #f8f9fa;*/
+    margin: 0;
+    padding: 0;
+    font-family: var(--c-font);
+    font-size: 14px;
+    line-height: 1.6;
+    background: var(--c-bg);
+    color: var(--c-text);
+    -webkit-font-smoothing: antialiased;
 }
 
-
-.sbo-svg{
-    color:red;
-    stroke:red;
+/* ── Header ─────────────────────────────────────────────── */
+.sbo-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 300;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    background: var(--c-white);
+    border-bottom: 1px solid var(--c-outline);
+    gap: 16px;
 }
 
-.sbo-svg:hover{
-    color:green;
-    stroke:green;
+.sbo-brand {
+    font-size: 20px;
+    font-weight: 400;
+    color: var(--c-text);
+    text-decoration: none;
+    letter-spacing: -0.005em;
+    flex-shrink: 0;
+}
+
+.sbo-brand strong {
+    font-weight: 500;
+}
+
+/* Material chip for key status */
+.sbo-key-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--c-text-2);
+    background: var(--c-bg);
+    border: 1px solid var(--c-outline);
+    border-radius: var(--r-pill);
+    padding: 6px 14px;
+    max-width: 220px;
+    overflow: hidden;
+    cursor: default;
+}
+
+.sbo-key-pill i { font-size: 14px; flex-shrink: 0; }
+
+.sbo-key-pill span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sbo-key-pill.has-key {
+    color: var(--c-green);
+    background: var(--c-green-bg);
+    border-color: #a8d5b5;
+}
+
+/* ── Material tabs navigation ───────────────────────────── */
+.sbo-nav {
+    position: sticky;
+    top: 64px;
+    z-index: 200;
+    background: var(--c-white);
+    border-bottom: 1px solid var(--c-outline);
+    display: flex;
+    align-items: stretch;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 0 8px;
+}
+
+.sbo-nav::-webkit-scrollbar { display: none; }
+
+.sbo-nav-link {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 16px;
+    height: 48px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--c-text-2);
+    text-decoration: none;
+    white-space: nowrap;
+    user-select: none;
+    flex-shrink: 0;
+    border-bottom: 3px solid transparent;
+    border-radius: var(--r-xs) var(--r-xs) 0 0;
+    transition: color 0.15s, background 0.15s;
+    letter-spacing: 0.01em;
+}
+
+.sbo-nav-link:hover {
+    color: var(--c-primary);
+    background: var(--c-primary-bg);
+    text-decoration: none;
+}
+
+.sbo-nav-link.active {
+    color: var(--c-primary);
+    border-bottom-color: var(--c-primary);
+    font-weight: 700;
+}
+
+/* Notification dot for contacts count */
+.sbo-nav-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--c-primary);
+    color: white;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+}
+
+.sbo-nav-link:not(.active) .sbo-nav-count {
+    background: var(--c-text-3);
+}
+
+.sbo-nav-sep {
+    width: 1px;
+    margin: 12px 8px;
+    background: var(--c-outline);
+    flex-shrink: 0;
+}
+
+/* ── Content area ───────────────────────────────────────── */
+.sbo-main {
+    max-width: var(--c-max-w);
+    margin: 0 auto;
+    padding: 24px 16px 64px;
+}
+
+/* ── Section header ─────────────────────────────────────── */
+.sbo-section-title {
+    font-size: 22px;
+    font-weight: 400;
+    color: var(--c-text);
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+}
+
+.sbo-section-desc {
+    font-size: 14px;
+    color: var(--c-text-2);
+    margin: 0 0 20px;
+}
+
+/* ── Cards ──────────────────────────────────────────────── */
+.sbo-card {
+    background: var(--c-white);
+    border: 1px solid var(--c-outline);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+}
+
+.sbo-card + .sbo-card { margin-top: 16px; }
+
+.sbo-card-hd {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--c-outline);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--c-text-2);
+}
+
+.sbo-card-body { padding: 16px; }
+
+/* ── Key row ────────────────────────────────────────────── */
+.sbo-key-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--c-outline);
+}
+
+.sbo-key-row:first-child { padding-top: 0; }
+.sbo-key-row:last-child  { border-bottom: none; padding-bottom: 0; }
+
+.sbo-key-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--r-sm);
+    background: var(--c-primary-bg);
+    color: var(--c-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+}
+
+.sbo-key-name {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--c-text);
+    margin-bottom: 2px;
+}
+
+.sbo-key-meta {
+    font-size: 12px;
+    color: var(--c-text-3);
+    margin-bottom: 8px;
+}
+
+.sbo-key-downloads {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
+.sbo-key-dl-label {
+    font-size: 12px;
+    color: var(--c-text-2);
+    font-weight: 500;
+}
+
+/* ── Empty state ────────────────────────────────────────── */
+.sbo-empty {
+    padding: 48px 20px;
+    text-align: center;
+}
+
+.sbo-empty-icon {
+    font-size: 56px;
+    color: var(--c-primary-bg2);
+    display: block;
+    margin-bottom: 16px;
+}
+
+.sbo-empty-title {
+    font-size: 20px;
+    font-weight: 400;
+    color: var(--c-text);
+    margin-bottom: 8px;
+}
+
+.sbo-empty-desc {
+    font-size: 14px;
+    color: var(--c-text-2);
+    max-width: 380px;
+    margin: 0 auto 24px;
+    line-height: 1.6;
+}
+
+/* ── Button row ─────────────────────────────────────────── */
+.sbo-btn-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+}
+
+/* ── Tip / info line ────────────────────────────────────── */
+.sbo-tip {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--c-text-2);
+    margin-top: 10px;
+    line-height: 1.5;
+}
+
+.sbo-tip i { margin-top: 1px; flex-shrink: 0; color: var(--c-text-3); }
+
+/* ── Footer ─────────────────────────────────────────────── */
+.sbo-footer {
+    text-align: center;
+    padding: 24px;
+    font-size: 12px;
+    color: var(--c-text-2);
+    border-top: 1px solid var(--c-outline);
+    background: var(--c-white);
+    line-height: 2;
+}
+
+.sbo-footer a { color: var(--c-text-2); text-decoration: none; }
+.sbo-footer a:hover { color: var(--c-primary); }
+
+/* ============================================================
+   Bootstrap overrides — Material / Google style
+   ============================================================ */
+
+/* ── Buttons ─────────────────────────────────────────────── */
+.btn {
+    border-radius: var(--r-pill);
+    font-size: 14px;
+    font-weight: 500;
+    padding: 9px 24px;
+    line-height: 1.35;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+
+.btn-sm { font-size: 13px; padding: 6px 16px; }
+
+.btn:disabled { opacity: 0.38; cursor: default; box-shadow: none; }
+
+/* Filled = Google blue */
+.btn-primary {
+    background: var(--c-primary);
+    border-color: var(--c-primary);
+    color: white;
+    box-shadow: var(--elev-1);
+}
+.btn-primary:hover, .btn-primary:focus, .btn-primary:active {
+    background: var(--c-primary-dk);
+    border-color: var(--c-primary-dk);
+    color: white;
+    box-shadow: var(--elev-2);
+}
+.btn-primary:disabled { background: var(--c-primary); border-color: var(--c-primary); box-shadow: none; }
+
+/* Warning = also Google blue (encrypt CTA) */
+.btn-warning {
+    background: var(--c-primary);
+    border-color: var(--c-primary);
+    color: white;
+    box-shadow: var(--elev-1);
+}
+.btn-warning:hover, .btn-warning:focus, .btn-warning:active {
+    background: var(--c-primary-dk);
+    border-color: var(--c-primary-dk);
+    color: white;
+    box-shadow: var(--elev-2);
+}
+.btn-warning:disabled { background: var(--c-primary); color: white; box-shadow: none; }
+
+/* Tonal secondary (Material 3 "tonal filled") */
+.btn-secondary {
+    background: var(--c-primary-bg);
+    border-color: transparent;
+    color: var(--c-primary);
+}
+.btn-secondary:hover, .btn-secondary:focus, .btn-secondary:active {
+    background: var(--c-primary-bg2);
+    border-color: transparent;
+    color: var(--c-primary);
+}
+
+/* Outlined ghost */
+.btn-outline-light, .btn-outline-secondary {
+    background: transparent;
+    border: 1px solid var(--c-outline);
+    color: var(--c-primary);
+}
+.btn-outline-light:hover, .btn-outline-secondary:hover {
+    background: var(--c-primary-bg);
+    color: var(--c-primary);
+    border-color: var(--c-outline);
+}
+
+/* ── Forms ───────────────────────────────────────────────── */
+.form-control, .form-select {
+    border-radius: var(--r-xs);
+    border: 2px solid var(--c-outline);
+    font-size: 14px;
+    padding: 9px 13px;
+    background: var(--c-white);
+    color: var(--c-text);
+    font-family: var(--c-font);
+    transition: border-color 0.15s;
+}
+
+.form-control:focus, .form-select:focus {
+    border-color: var(--c-primary);
+    box-shadow: none;
+    outline: none;
+}
+
+textarea.form-control { resize: vertical; }
+
+.form-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--c-text-2);
+    margin-bottom: 4px;
+}
+
+.form-text { font-size: 12px; color: var(--c-text-3); }
+.form-check-label { font-size: 14px; }
+
+.input-group-text {
+    border-radius: var(--r-xs);
+    border: 2px solid var(--c-outline);
+    border-right: none;
+    background: var(--c-bg);
+    font-size: 15px;
+    color: var(--c-text-2);
+}
+
+.input-group .form-control { border-left: none; }
+.input-group .form-control:focus { border-left: none; }
+
+/* ── Alerts ──────────────────────────────────────────────── */
+.alert {
+    border: none;
+    border-left: 4px solid;
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    font-size: 14px;
+    padding: 12px 16px;
+    line-height: 1.5;
+}
+
+.alert-warning  { background: var(--c-yellow-bg); border-left-color: var(--c-yellow); color: #7a4100; }
+.alert-danger   { background: var(--c-red-bg);    border-left-color: var(--c-red);    color: #700b00; }
+.alert-success  { background: var(--c-green-bg);  border-left-color: var(--c-green);  color: #0d652d; }
+.alert-light    { background: var(--c-bg);         border-left-color: var(--c-outline); color: var(--c-text-2); }
+
+/* ── Badges ──────────────────────────────────────────────── */
+.badge {
+    border-radius: var(--r-pill);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    letter-spacing: 0.02em;
+}
+
+.bg-success  { background: var(--c-green) !important; }
+.bg-danger   { background: var(--c-red)   !important; }
+.bg-warning  { background: var(--c-yellow) !important; color: white !important; }
+.bg-secondary{ background: var(--c-text-2) !important; }
+
+/* ── Bootstrap cards ─────────────────────────────────────── */
+.card {
+    border-radius: var(--r-sm);
+    border-color: var(--c-outline);
+    box-shadow: none;
+}
+
+.card-header {
+    background: var(--c-bg);
+    border-bottom-color: var(--c-outline);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--c-text-2);
+    padding: 10px 16px;
+}
+
+.card-body { padding: 16px; }
+
+/* ── List group ──────────────────────────────────────────── */
+.list-group-item {
+    border-color: var(--c-outline);
+    font-size: 14px;
+    padding: 12px 16px;
+}
+
+.list-group-item-action:hover {
+    background: var(--c-bg);
+}
+
+/* ── Fieldsets ───────────────────────────────────────────── */
+fieldset.border, fieldset.border-primary-subtle {
+    border: 2px solid var(--c-outline) !important;
+    border-radius: var(--r-sm) !important;
+}
+
+legend.fs-6 {
+    font-size: 11px !important;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--c-text-2) !important;
+    padding: 0 6px;
+}
+
+/* ── Monospace ───────────────────────────────────────────── */
+.font-monospace {
+    font-family: var(--c-mono) !important;
+    font-size: 13px !important;
+}
+
+/* ── Responsive ──────────────────────────────────────────── */
+@media (max-width: 520px) {
+    .sbo-topbar { padding: 0 16px; height: 56px; }
+    .sbo-nav    { top: 56px; }
+    .sbo-main   { padding: 16px 12px 56px; }
+    .sbo-key-pill { max-width: 130px; font-size: 12px; padding: 5px 10px; }
+    .btn        { font-size: 13px; padding: 8px 20px; }
 }
