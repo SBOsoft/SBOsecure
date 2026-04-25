@@ -1,0 +1,14 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: sbosecure_web
+    ports:
+      - "21443:443"     # Host port 21443 -> Container port 443 (HTTPS)
+    volumes:
+      - ../webapp/DocumentRoot:/var/www/html
+    #restart: no         # change to always or unless-stopped for non-dev envs

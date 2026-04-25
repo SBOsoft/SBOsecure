@@ -1,0 +1,12 @@
+{
+  "name": "sbosecure-webapp",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "generate-fixtures": "node test/generate-fixtures.js"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}
