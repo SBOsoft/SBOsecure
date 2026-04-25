@@ -48,7 +48,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
     --r-xs:   4px;
     --r-sm:   8px;
     --r-md:   12px;
-    --r-pill: 24px;
+    --r-pill: 6px;
 
     /* Roboto is on Android/Chrome OS; falls back to system-ui elsewhere */
     --c-font: Roboto, 'Google Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -57,6 +57,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 }
 
 *, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; }
 
 html { scroll-behavior: smooth; }
 
@@ -70,6 +72,15 @@ body {
     color: var(--c-text);
     -webkit-font-smoothing: antialiased;
 }
+
+/* Sticky footer: app fills viewport, main grows, footer stays at bottom */
+#app {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+.sbo-main { flex: 1; }
 
 /* ── Header ─────────────────────────────────────────────── */
 .sbo-topbar {
@@ -206,6 +217,7 @@ body {
 /* ── Content area ───────────────────────────────────────── */
 .sbo-main {
     max-width: var(--c-max-w);
+    width: var(--c-max-w);
     margin: 0 auto;
     padding: 24px 16px 64px;
 }
@@ -465,17 +477,24 @@ textarea.form-control { resize: vertical; }
 .form-text { font-size: 12px; color: var(--c-text-3); }
 .form-check-label { font-size: 14px; }
 
+/* Layout is always [form-control LEFT | input-group-text RIGHT].
+   Remove the shared inner border, keep the outer ones. */
+.input-group > .form-control {
+    border-right-width: 0;
+    border-radius: var(--r-xs) 0 0 var(--r-xs);
+}
+
+.input-group > .form-control:focus { border-right-width: 0; }
+
 .input-group-text {
-    border-radius: var(--r-xs);
     border: 2px solid var(--c-outline);
-    border-right: none;
+    border-left-width: 0;
+    border-radius: 0 var(--r-xs) var(--r-xs) 0;
     background: var(--c-bg);
     font-size: 15px;
     color: var(--c-text-2);
+    cursor: pointer;
 }
-
-.input-group .form-control { border-left: none; }
-.input-group .form-control:focus { border-left: none; }
 
 /* ── Alerts ──────────────────────────────────────────────── */
 .alert {
