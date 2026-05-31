@@ -399,7 +399,7 @@ const LoadMyKeysForm = {
     <div class="col-md-6">    
         <div>
             <label for="loadKeySelectedFile" class="form-label">Load from file</label>
-            <input v-on:change="loadKeyFileSelected" class="form-control" type="file" id="loadKeySelectedFile" name="loadKeySelectedFile">
+            <input v-on:change="loadKeyFileSelected" class="form-control" type="file" accept=".json" id="loadKeySelectedFile" name="loadKeySelectedFile">
         </div>
     </div>
     <div class="col-md-6">
@@ -1081,7 +1081,7 @@ const EncryptForm = {
 
 <div v-if="inputMode==='file'" class="my-2">
     <label class="form-label">Select file</label>
-    <input type="file" class="form-control" v-on:change="onFileSelected">
+    <input type="file" class="form-control" accept="*/*" v-on:change="onFileSelected">
     <div v-if="selectedFileName" class="form-text">Selected: {{ selectedFileName }}</div>
 </div>
 
