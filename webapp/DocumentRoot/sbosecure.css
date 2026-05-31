@@ -60,8 +60,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 html, body { height: 100%; }
 
-html { scroll-behavior: smooth; }
-
 body {
     margin: 0;
     padding: 0;
@@ -75,17 +73,14 @@ body {
 
 /* Sticky footer: app fills viewport, main grows, footer stays at bottom */
 #app {
-    display: flex;
-    flex-direction: column;
-    min-height: 100vh;
 }
 
 .sbo-main { flex: 1; }
 
 /* ── Header ─────────────────────────────────────────────── */
 .sbo-topbar {
-    position: sticky;
-    top: 0;
+    /*position: sticky;
+    top: 0;*/
     z-index: 300;
     height: 64px;
     display: flex;
@@ -221,7 +216,7 @@ body {
     max-width: var(--c-max-w);
     width: 100%;
     margin: 0 auto;
-    padding: 24px 16px 64px;
+    padding: 16px 16px 16px;
 }
 
 /* ── Section header ─────────────────────────────────────── */
@@ -589,7 +584,7 @@ legend.fs-6 {
 
 /* Tablet: stop the header from being too airy */
 @media (max-width: 768px) {
-    .sbo-main { padding: 20px 14px 56px; }
+    .sbo-main { padding: 16px 16px 16px; }
 }
 
 /* Mobile: everything below 576 px (covers all modern phones) */
@@ -616,7 +611,6 @@ legend.fs-6 {
     }
     .sbo-nav-link {
         padding: 0 5px;
-        height: 44px;
         font-size: 13px;
         gap: 2px;
     }
@@ -664,7 +658,6 @@ legend.fs-6 {
     .sbo-nav-sep { display: none; }
     .sbo-nav-link {
         padding: 0 5px;
-        height: 44px;
         font-size: 12px;
         gap: 0px;
     }

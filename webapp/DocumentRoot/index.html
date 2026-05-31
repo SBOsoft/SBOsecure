@@ -59,11 +59,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 </head>
 <body>
 
-<div id="app">
-
+<div id="app" class="d-flex flex-column justify-content-center vh-100">
+    <div class="flew-grow-0">
     <!-- ── Header ───────────────────────────────────────────── -->
     <header class="sbo-topbar">
-        <span class="sbo-brand">SBO<strong>secure</strong></span>
+        <span class="sbo-brand" id="pageTopHeader">SBO<strong>secure</strong></span>
         <div class="sbo-key-pill" v-bind:class="{'has-key': myKeys.length > 0}">
             <i class="bi" v-bind:class="myKeys.length > 0 ? 'bi-key-fill' : 'bi-key'"></i>
             <span v-if="myKeys.length > 0">{{ myKeys[0].downloadable.name }}</span>
@@ -108,9 +108,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             Base64
         </a>
     </nav>
-
+    </div>
     <!-- ── Page content ─────────────────────────────────────── -->
-    <main class="sbo-main">
+    <main class="sbo-main flex-grow-1">
 
         <!-- ===== MY KEYS ===================================== -->
         <div v-show="activeTab.startsWith('keys')">
@@ -155,18 +155,22 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                                     Created {{ printKeyCreated(akey.downloadable.created) }}
                                 </div>
                                 <div class="sbo-key-downloads">
+                                    <div class="d-inline-block">
                                     <span class="sbo-key-dl-label">Public key</span>
                                     <sbo-down-item
                                         v-bind:item-data="JSON.stringify(akey.jwks.public)"
                                         file-name="public.jwks.json"
                                         mime-type="application/json">
                                     </sbo-down-item>
+                                    </div>
+                                    <div class="d-inline-block">
                                     <span class="sbo-key-dl-label" style="margin-left:8px">Keyset</span>
                                     <sbo-down-item
                                         v-bind:item-data="JSON.stringify(akey.downloadable)"
                                         v-bind:file-name="(akey.downloadable.name || 'SBOsecure') + '-keyset.json'"
                                         mime-type="application/json">
                                     </sbo-down-item>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -402,9 +406,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 this.switchActiveTab('encrypt');
             },
             scrollToTop() {
-                this.$nextTick(() => {
-                    document.getElementById('topNavbar').scrollIntoView({ behavior: 'smooth' });
-                });
+                window.scrollTo(0, 0);
             },
             showKeysTab() { this.switchActiveTab('keys'); },
             showMainTab() { this.switchActiveTab('encrypt'); },

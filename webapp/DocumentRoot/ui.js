@@ -27,7 +27,7 @@ const DownloadableItem = {
             await navigator.clipboard.writeText(this.itemData);
         }
     },
-    template: `<div class="d-inline-block">
+    template: `<div class="d-inline-block d-flex justify-content-between">
     <button v-on:click="copy" class="btn btn-sm btn-outline-light">
         <img src="img/copy.svg" border="0"> 
         Copy
