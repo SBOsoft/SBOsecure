@@ -379,7 +379,24 @@ class SBO_AESDecrypt{
             return null;
         }
     }
-    
+
+    /** Returns raw ArrayBuffer — safe for binary content that would be corrupted by TextDecoder. */
+    static async decryptAsBuffer(ciphertextBase64Encoded /* string */, ivDataB64Encoded /* string */, aesCryptoKey /* CryptoKey */, aesAlgName /* string */){
+        try{
+            const b64 = new SBO_Base64(false);
+            const ivBytes = b64.decodeAsByteArray(ivDataB64Encoded);
+            const algo = { name: aesAlgName, iv: ivBytes };
+            const ciphertextBytes = b64.decodeAsByteArray(ciphertextBase64Encoded);
+            const plainTextBuffer = await window.crypto.subtle.decrypt(algo, aesCryptoKey, ciphertextBytes);
+            return plainTextBuffer;
+        }
+        catch(ex){
+            console.log("SBO_AESDecrypt.decryptAsBuffer failed");
+            console.log(ex);
+            return null;
+        }
+    }
+
 }
 
 class SBO_PBKDF2{

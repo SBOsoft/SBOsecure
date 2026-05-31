@@ -231,7 +231,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 <div class="sbo-card-body">
                     <sbo-encrypt-form
                         v-bind:my-keys="myKeys"
-                        v-bind:my-contacts="myContacts">
+                        v-bind:my-contacts="myContacts"
+                        v-bind:encrypt-preload="encryptPreload">
                     </sbo-encrypt-form>
                 </div>
             </div>
@@ -251,7 +252,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             <div class="sbo-card">
                 <div class="sbo-card-hd">Decrypt</div>
                 <div class="sbo-card-body">
-                    <sbo-decrypt-form v-bind:my-keys="myKeys"></sbo-decrypt-form>
+                    <sbo-decrypt-form
+                        v-bind:my-keys="myKeys"
+                        v-on:encrypt-with-text="handleEncryptWithText">
+                    </sbo-decrypt-form>
                 </div>
             </div>
         </div><!-- /decrypt -->
@@ -364,7 +368,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
     <!-- ── Footer ────────────────────────────────────────────── -->
     <footer class="sbo-footer">
-        All processing takes place locally in your browser — no data is sent to a server.
+        <span class="text-danger fw-medium">All processing takes place locally in your browser, no data is sent to a server ever.</span>
         <br>
         <a href="https://github.com/SBOsoft/SBOsecure" target="_blank">
             <i class="bi bi-github"></i> SBOsoft/SBOsecure
@@ -384,13 +388,18 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 myContacts: [],
                 showingContactForm: false,
                 currentEditedContact: {},
-                currentEditedContactIndex: -1
+                currentEditedContactIndex: -1,
+                encryptPreload: null
             };
         },
         methods: {
             switchActiveTab(tab) {
                 this.activeTab = tab;
                 this.scrollToTop();
+            },
+            handleEncryptWithText(text) {
+                this.encryptPreload = { text };
+                this.switchActiveTab('encrypt');
             },
             scrollToTop() {
                 this.$nextTick(() => {

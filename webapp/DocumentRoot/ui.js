@@ -334,10 +334,11 @@ const LoadMyKeysForm = {
             loadKeyPastedText: '',
             loadKeyPassword: '',
             loadKeyIterations: 600000,
-            loadKeyPasswordVisible: false
+            loadKeyPasswordVisible: false,
+            loadKeyError: null
         }
     },
-    methods:{        
+    methods:{
         toggleLoadKeyPassword(){
             this.loadKeyPasswordVisible = !this.loadKeyPasswordVisible;
         },
@@ -348,15 +349,35 @@ const LoadMyKeysForm = {
                 reader.onload = (e) => {
                     const textContent = e.target.result;
                     this.loadKeyPastedText = textContent;
+                    this.loadKeyError = null;
                 };
                 reader.readAsText(file);
             }
         },
+        validIterations(val) {
+            const n = Number(val);
+            return Number.isInteger(n) && n >= 600000 && n <= 1000000;
+        },
         async loadKeySet(){
-            let keySetJson = JSON.parse(this.loadKeyPastedText);
-            if(!keySetJson){
-                alert('Failed to load keyset');
-               return; 
+            this.loadKeyError = null;
+            if (!this.loadKeyPastedText.trim()) {
+                this.loadKeyError = 'Select a key file or paste the key content.';
+                return;
+            }
+            if (!this.loadKeyPassword) {
+                this.loadKeyError = 'Enter a password.';
+                return;
+            }
+            if (!this.validIterations(this.loadKeyIterations)) {
+                this.loadKeyError = 'Iterations must be a whole number between 600,000 and 1,000,000.';
+                return;
+            }
+            let keySetJson;
+            try {
+                keySetJson = JSON.parse(this.loadKeyPastedText);
+            } catch {
+                this.loadKeyError = 'Invalid key file — could not parse JSON.';
+                return;
             }
 
             //keySetJson.jwks is base64 encoded pbkdf encrypted jwks
@@ -364,21 +385,13 @@ const LoadMyKeysForm = {
             let salt = b64.decodeAsByteArray(keySetJson.salt);
             let cryptoKeyForPbkdf = await SBO_PBKDF2.generateKey(this.loadKeyPassword, salt, this.loadKeyIterations, SBO_AES_ALG_NAME);
 
-            let plainText = await SBO_AESDecrypt.decrypt(keySetJson.jwks, keySetJson.iv, cryptoKeyForPbkdf, SBO_AES_ALG_NAME);                
-            if(plainText){
+            let plainText = await SBO_AESDecrypt.decrypt(keySetJson.jwks, keySetJson.iv, cryptoKeyForPbkdf, SBO_AES_ALG_NAME);
+            if (plainText) {
                 let parsedJwks = JSON.parse(plainText);
-                /*
-                let keyObj = {
-                    name: keySetJson.name,
-                    jwks: parsedJwks,
-                    created: keySetJson.created
-                };
-                */
                 this.keysLoadedCallback(keySetJson, parsedJwks);
+            } else {
+                this.loadKeyError = 'Could not decrypt key. Check the password and iterations number.';
             }
-            else{
-                alert('Failed to load keyset, check password and the number');
-            }                
         }
     },
     template:`<div>
@@ -416,6 +429,7 @@ const LoadMyKeysForm = {
 <div class="my-2">
     <button type="button" v-on:click="loadKeySet()" class="btn btn-primary">Load key</button>
 </div>
+<div v-if="loadKeyError" class="alert alert-danger py-2">{{ loadKeyError }}</div>
 </div>
 `
 };
@@ -583,6 +597,7 @@ const ContactInfo = {
  */
 const DecryptForm = {
     props: ['myKeys'],
+    emits: ['encrypt-with-text'],
     data() {
         return {
             inputMode: 'paste',
@@ -591,7 +606,9 @@ const DecryptForm = {
             decrypting: false,
             decryptError: null,
             decryptedText: null,
+            decryptedBuffer: null,
             decryptedFileName: null,
+            decryptedContentType: null,
             signatureStatus: null   // null | 'valid' | 'invalid' | 'unsigned' | 'error'
         };
     },
@@ -639,7 +656,9 @@ const DecryptForm = {
         resetResult() {
             this.decryptError = null;
             this.decryptedText = null;
+            this.decryptedBuffer = null;
             this.decryptedFileName = null;
+            this.decryptedContentType = null;
             this.signatureStatus = null;
         },
         async decrypt() {
@@ -683,16 +702,31 @@ const DecryptForm = {
                 const cek = await window.crypto.subtle.importKey(
                     'raw', rawCek, { name: SBO_AES_ALG_NAME }, false, ['decrypt']
                 );
-                const decrypted = await SBO_AESDecrypt.decrypt(
-                    pkg.encryptedContent.ciphertext,
-                    pkg.encryptedContent.iv,
-                    cek,
-                    SBO_AES_ALG_NAME
-                );
-                if (decrypted === null) throw new Error('Decryption produced no output. The package may be corrupted.');
 
-                this.decryptedText = decrypted;
-                this.decryptedFileName = pkg.encryptedContent.originalName || 'decrypted.txt';
+                const contentType = pkg.encryptedContent.contentType || 'text/plain';
+                const isBinary = contentType !== 'text/plain';
+
+                if (isBinary) {
+                    const buf = await SBO_AESDecrypt.decryptAsBuffer(
+                        pkg.encryptedContent.ciphertext,
+                        pkg.encryptedContent.iv,
+                        cek,
+                        SBO_AES_ALG_NAME
+                    );
+                    if (buf === null) throw new Error('Decryption produced no output. The package may be corrupted.');
+                    this.decryptedBuffer = buf;
+                    this.decryptedContentType = contentType;
+                } else {
+                    const decrypted = await SBO_AESDecrypt.decrypt(
+                        pkg.encryptedContent.ciphertext,
+                        pkg.encryptedContent.iv,
+                        cek,
+                        SBO_AES_ALG_NAME
+                    );
+                    if (decrypted === null) throw new Error('Decryption produced no output. The package may be corrupted.');
+                    this.decryptedText = decrypted;
+                }
+                this.decryptedFileName = pkg.encryptedContent.originalName || (isBinary ? 'decrypted-file' : 'decrypted.txt');
 
                 // Verify signature
                 if (!pkg.signature || !pkg.signerPublicKey) {
@@ -723,7 +757,20 @@ const DecryptForm = {
             }
         },
         downloadDecrypted() {
-            SBO_SaveAsFile(this.decryptedText, this.decryptedFileName, 'application/octet-stream');
+            if (this.decryptedBuffer !== null) {
+                SBO_SaveAsFile(new Uint8Array(this.decryptedBuffer), this.decryptedFileName, this.decryptedContentType || 'application/octet-stream');
+            } else {
+                SBO_SaveAsFile(this.decryptedText, this.decryptedFileName, 'application/octet-stream');
+            }
+        },
+        reset() {
+            this.inputMode = 'paste';
+            this.packageJson = '';
+            this.selectedFile = null;
+            this.resetResult();
+        },
+        encryptDecryptedText() {
+            this.$emit('encrypt-with-text', this.decryptedText);
         }
     },
     template: `<div>
@@ -765,10 +812,13 @@ const DecryptForm = {
     No keys loaded. Load your keys in the Keys tab first.
 </div>
 
-<div class="my-2">
+<div class="my-2 d-flex gap-2 align-items-center flex-wrap">
     <button type="button" class="btn btn-primary" v-on:click="decrypt" v-bind:disabled="!canDecrypt">
         <span v-if="decrypting">Decrypting...</span>
         <span v-else>Decrypt</span>
+    </button>
+    <button type="button" class="btn btn-outline-secondary btn-sm" v-on:click="reset">
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
     </button>
 </div>
 
@@ -776,19 +826,31 @@ const DecryptForm = {
     <strong>Could not decrypt</strong><br>{{ decryptError }}
 </div>
 
-<div v-if="decryptedText !== null" class="my-2">
+<div v-if="decryptedText !== null || decryptedBuffer !== null" class="my-2">
     <div class="mb-2">
         <span v-if="signatureStatus === 'valid'"   class="badge bg-success">Signature valid</span>
         <span v-if="signatureStatus === 'invalid'" class="badge bg-danger">Signature invalid — content may have been tampered</span>
         <span v-if="signatureStatus === 'error'"   class="badge bg-warning text-dark">Signature could not be verified</span>
         <span v-if="signatureStatus === 'unsigned'" class="badge bg-secondary">No signature</span>
     </div>
-    <label class="form-label">Decrypted content</label>
-    <textarea class="form-control font-monospace small" rows="10" readonly v-model="decryptedText"></textarea>
-    <div class="mt-2">
-        <button type="button" class="btn btn-sm btn-outline-secondary" v-on:click="downloadDecrypted">
-            <img src="img/download.svg" border="0"> Save as {{ decryptedFileName }}
+    <div v-if="decryptedBuffer !== null" class="alert alert-success d-flex align-items-center gap-3 flex-wrap">
+        <i class="bi bi-check-circle-fill fs-5"></i>
+        <div class="flex-fill">Binary file decrypted successfully.</div>
+        <button type="button" class="btn btn-success btn-sm" v-on:click="downloadDecrypted">
+            <img src="img/download.svg" border="0"> Save {{ decryptedFileName }}
         </button>
+    </div>
+    <div v-if="decryptedText !== null">
+        <label class="form-label">Decrypted content</label>
+        <textarea class="form-control font-monospace small" rows="10" v-model="decryptedText"></textarea>
+        <div class="mt-2 d-flex gap-2 flex-wrap">
+            <button type="button" class="btn btn-sm btn-outline-secondary" v-on:click="downloadDecrypted">
+                <img src="img/download.svg" border="0"> Save as {{ decryptedFileName }}
+            </button>
+            <button type="button" class="btn btn-sm btn-warning" v-on:click="encryptDecryptedText">
+                <i class="bi bi-lock-fill me-1"></i>Encrypt this text
+            </button>
+        </div>
     </div>
 </div>
 
@@ -802,7 +864,7 @@ const DecryptForm = {
  * - RSASSA-PKCS1-v1_5 to sign the whole package with the user's own key
  */
 const EncryptForm = {
-    props: ['myKeys', 'myContacts'],
+    props: ['myKeys', 'myContacts', 'encryptPreload'],
     data() {
         return {
             inputMode: 'text',
@@ -833,7 +895,26 @@ const EncryptForm = {
             return typeof navigator.share === 'function';
         }
     },
+    watch: {
+        encryptPreload(val) {
+            if (val && val.text != null) {
+                this.reset();
+                this.inputMode = 'text';
+                this.plainText = val.text;
+            }
+        }
+    },
     methods: {
+        reset() {
+            this.inputMode = 'text';
+            this.plainText = '';
+            this.selectedFile = null;
+            this.selectedFileName = '';
+            this.selectedRecipients = [];
+            this.encryptError = null;
+            this.encryptedPackageJson = null;
+            this.encryptedFileName = null;
+        },
         onFileSelected(event) {
             const file = event.target.files[0];
             if (file) {
@@ -857,12 +938,15 @@ const EncryptForm = {
                 // 1. Read input as bytes
                 let contentBytes;
                 let originalName;
+                let contentType;
                 if (this.inputMode === 'file' && this.selectedFile) {
                     contentBytes = await this.selectedFile.arrayBuffer();
                     originalName = this.selectedFile.name;
+                    contentType = this.selectedFile.type || 'application/octet-stream';
                 } else {
                     contentBytes = new TextEncoder().encode(this.plainText);
                     originalName = 'message.txt';
+                    contentType = 'text/plain';
                 }
 
                 // 2. Generate a random AES-GCM content encryption key (CEK)
@@ -913,7 +997,8 @@ const EncryptForm = {
                     encryptedContent: {
                         ciphertext: aesEnc.getCipherTextBase64Encoded(),
                         iv: aesEnc.getIVBase64Encoded(),
-                        originalName: originalName
+                        originalName: originalName,
+                        contentType: contentType
                     },
                     encryptedKeys: encryptedKeys
                 };
@@ -1025,10 +1110,13 @@ const EncryptForm = {
     </div>
 </div>
 
-<div class="my-2">
+<div class="my-2 d-flex gap-2 align-items-center flex-wrap">
     <button type="button" class="btn btn-warning" v-on:click="encrypt" v-bind:disabled="!canEncrypt">
         <span v-if="encrypting">Encrypting...</span>
         <span v-else>Encrypt</span>
+    </button>
+    <button type="button" class="btn btn-outline-secondary btn-sm" v-on:click="reset">
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
     </button>
 </div>
 
