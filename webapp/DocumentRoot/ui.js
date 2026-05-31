@@ -45,29 +45,61 @@ const PBKDFEncryptDecrypt = {
     props:[],
     data: function () {
         return {
+            pbkdfMode: null,
             pbkdfPasswordVisible: false,
             pbkdfPassword: '',
-            pbkdfIterations: 100000,
+            pbkdfIterations: 600000,
             pbkdfCipherText: '',
             pbkdfIV: '',
             pbkdfSalt: '',
             pbkdfPlainText: '',
-            pbkdfDecryptFailed: false
+            pbkdfDecryptFailed: false,
+            pbkdfPackage: null,
+            pbkdfLoadError: null,
+            pbkdfError: null
         };
     },
     methods:{
         togglePbkdfPassword(){
             this.pbkdfPasswordVisible = !this.pbkdfPasswordVisible;
         },
-        async pbkdfDecrypt(){
+        goBack(){
+            this.pbkdfMode = null;
+            this.pbkdfPassword = '';
+            this.pbkdfPasswordVisible = false;
+            this.pbkdfPlainText = '';
+            this.pbkdfCipherText = '';
+            this.pbkdfIV = '';
+            this.pbkdfSalt = '';
+            this.pbkdfPackage = null;
             this.pbkdfDecryptFailed = false;
+            this.pbkdfLoadError = null;
+            this.pbkdfError = null;
+        },
+        validIterations(val){
+            const n = Number(val);
+            return Number.isInteger(n) && n >= 600000 && n <= 1000000;
+        },
+        async pbkdfDecrypt(){
+            this.pbkdfError = null;
+            this.pbkdfDecryptFailed = false;
+            this.pbkdfPlainText = '';
+            if (!this.pbkdfCipherText) {
+                this.pbkdfError = 'Load an encrypted package file first.';
+                return;
+            }
+            if (!this.pbkdfPassword) {
+                this.pbkdfError = 'Enter a password.';
+                return;
+            }
+            if (!this.validIterations(this.pbkdfIterations)) {
+                this.pbkdfError = 'Iterations must be a whole number between 600,000 and 1,000,000.';
+                return;
+            }
             const b64 = new SBO_Base64(false);
             let salt = b64.decodeAsByteArray(this.pbkdfSalt);
             let cryptoKeyForPbkdf = await SBO_PBKDF2.generateKey(this.pbkdfPassword, salt, this.pbkdfIterations, SBO_AES_ALG_NAME);
-
-
-            let plainText = await SBO_AESDecrypt.decrypt(this.pbkdfCipherText, this.pbkdfIV, cryptoKeyForPbkdf, SBO_AES_ALG_NAME);                
-            //let plainText = await SBO_AESDecrypt.decrypt2(this.pbkdfCipherText, salt, cryptoKeyForPbkdf, SBO_AES_ALG_NAME);                
+            let plainText = await SBO_AESDecrypt.decrypt(this.pbkdfCipherText, this.pbkdfIV, cryptoKeyForPbkdf, SBO_AES_ALG_NAME);
             if(!plainText) {
                 this.pbkdfDecryptFailed = true;
             }
@@ -77,56 +109,185 @@ const PBKDFEncryptDecrypt = {
          * both salt and IV are random. users must store them too along with the cipher text
          */
         async pbkdfEncrypt(){
+            this.pbkdfPackage = null;
+            this.pbkdfError = null;
+            if (!this.pbkdfPlainText.trim()) {
+                this.pbkdfError = 'Enter a message to encrypt.';
+                return;
+            }
+            if (!this.pbkdfPassword) {
+                this.pbkdfError = 'Enter a password.';
+                return;
+            }
+            if (!this.validIterations(this.pbkdfIterations)) {
+                this.pbkdfError = 'Iterations must be a whole number between 600,000 and 1,000,000.';
+                return;
+            }
             let salt = SBO_CryptoUtils.getRandomBytes(16);
             let cryptoKeyForPbkdf = await SBO_PBKDF2.generateKey(this.pbkdfPassword, salt, this.pbkdfIterations, SBO_AES_ALG_NAME);
             let aesEnc = new SBO_AESEncrypt();
             const utf8encoder = new TextEncoder();
             let uint8ArrayFromPlainText = utf8encoder.encode(this.pbkdfPlainText);
-            let encResult = await aesEnc.encrypt(uint8ArrayFromPlainText, SBO_AES_ALG_NAME, cryptoKeyForPbkdf);
+            await aesEnc.encrypt(uint8ArrayFromPlainText, SBO_AES_ALG_NAME, cryptoKeyForPbkdf);
+            const b64 = new SBO_Base64(false);
             this.pbkdfCipherText = aesEnc.getCipherTextBase64Encoded();
             this.pbkdfIV = aesEnc.getIVBase64Encoded();
-            const b64 = new SBO_Base64(false);                
-            this.pbkdfSalt =  b64.encodeBytes(salt);
+            this.pbkdfSalt = b64.encodeBytes(salt);
+            this.pbkdfPackage = JSON.stringify({
+                version: 1,
+                type: 'sbo-pbkdf-encrypted',
+                encryptedContent: {
+                    ciphertext: this.pbkdfCipherText,
+                    iv: this.pbkdfIV
+                },
+                pbkdf: {
+                    salt: this.pbkdfSalt
+                }
+            });
         },
+        downloadPbkdfPackage(){
+            SBO_SaveAsFile(this.pbkdfPackage, 'encrypted-message.sbo.json', 'application/json');
+        },
+        loadPbkdfPackageFile(event){
+            this.pbkdfLoadError = null;
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const pkg = JSON.parse(e.target.result);
+                    if (pkg.type !== 'sbo-pbkdf-encrypted') {
+                        this.pbkdfLoadError = 'Not a password-encrypted package. Use the Decrypt tab for public-key packages.';
+                        return;
+                    }
+                    this.pbkdfCipherText = pkg.encryptedContent.ciphertext;
+                    this.pbkdfIV        = pkg.encryptedContent.iv;
+                    this.pbkdfSalt      = pkg.pbkdf.salt;
+                    this.pbkdfPackage   = null;
+                    this.pbkdfPlainText = '';
+                    this.pbkdfDecryptFailed = false;
+                } catch {
+                    this.pbkdfLoadError = 'Could not parse file.';
+                }
+                event.target.value = '';
+            };
+            reader.readAsText(file);
+        }
     },
     template: `<div>
-<div class="my-2"> 
-    <label class="form-label" for="pbkdfPassword">Password</label>
-    <div class="input-group">                        
-        <input v-model="pbkdfPassword" v-bind:type="pbkdfPasswordVisible?'text':'password'" class="form-control" id="pbkdfPassword" aria-describedby="pbkdfPasswordHelp" required="">
-        <i class="input-group-text" id="pbkdfPasswordVisibleToggle" v-bind:class="{'bi bi-eye':pbkdfPasswordVisible, 'bi bi-eye-slash':!pbkdfPasswordVisible}" v-on:click="togglePbkdfPassword()"></i>
+
+<!-- ── Mode selector ──────────────────────────────────── -->
+<div v-if="pbkdfMode === null" class="row g-3 mt-1">
+    <div class="col-sm-6">
+        <div class="border rounded p-4 text-center h-100" style="cursor:pointer"
+             v-on:click="pbkdfMode = 'encrypt'">
+            <i class="bi bi-lock-fill fs-1 text-warning d-block mb-2"></i>
+            <div class="fw-semibold">Encrypt a message</div>
+            <div class="text-secondary small mt-1">Lock text with a password. Share the resulting file with the recipient.</div>
+        </div>
     </div>
-    <div id="pbkdfPasswordHelp" class="form-text">Your secret password</div>
+    <div class="col-sm-6">
+        <div class="border rounded p-4 text-center h-100" style="cursor:pointer"
+             v-on:click="pbkdfMode = 'decrypt'">
+            <i class="bi bi-unlock-fill fs-1 text-primary d-block mb-2"></i>
+            <div class="fw-semibold">Decrypt a message</div>
+            <div class="text-secondary small mt-1">Open a password-encrypted package file to read its contents.</div>
+        </div>
+    </div>
 </div>
-<div class="my-2"> 
-    <label class="form-label" for="pbkdfIterations">Enter a number between 100 and 100000</label>
-    <input v-model="pbkdfIterations" type="number"  min="100" max="100000" class="form-control" id="pbkdfIterations" aria-describedby="pbkdfIterationsHelp" required="">
-    <div id="pbkdfIterationsHelp" class="form-text">You will NOT be able to use your password if you forget this number. Larger is slower but safer</div>
+
+<!-- ── Encrypt screen ─────────────────────────────────── -->
+<div v-if="pbkdfMode === 'encrypt'">
+    <a href="#" class="small text-secondary d-inline-block mb-3" v-on:click.prevent="goBack()">
+        <i class="bi bi-arrow-left me-1"></i>Back
+    </a>
+    <div class="mb-3">
+        <label class="form-label" for="pbkdfPlainText">Message</label>
+        <textarea v-model="pbkdfPlainText" id="pbkdfPlainText" class="form-control" rows="6"
+                  placeholder="Enter the text you want to encrypt…"></textarea>
+    </div>
+    <div class="mb-3">
+        <label class="form-label" for="pbkdfEncPassword">Password</label>
+        <div class="input-group">
+            <input v-model="pbkdfPassword"
+                   v-bind:type="pbkdfPasswordVisible ? 'text' : 'password'"
+                   class="form-control" id="pbkdfEncPassword">
+            <i class="input-group-text" style="cursor:pointer"
+               v-bind:class="pbkdfPasswordVisible ? 'bi bi-eye' : 'bi bi-eye-slash'"
+               v-on:click="togglePbkdfPassword()"></i>
+        </div>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Iterations</label>
+        <input v-model.number="pbkdfIterations" type="number" min="600000" max="1000000" step="1000" class="form-control">
+        <div class="form-text">The recipient must use the same number to decrypt.</div>
+    </div>
+    <div class="mb-3">
+        <button type="button" v-on:click="pbkdfEncrypt" class="btn btn-warning">
+            <i class="bi bi-lock-fill me-1"></i>Encrypt
+        </button>
+    </div>
+    <div v-if="pbkdfError" class="alert alert-danger py-2">{{ pbkdfError }}</div>
+    <div v-if="pbkdfPackage" class="alert alert-success d-flex align-items-center gap-3">
+        <i class="bi bi-check-circle-fill fs-5"></i>
+        <div class="flex-fill">Encryption successful.</div>
+        <button type="button" v-on:click="downloadPbkdfPackage" class="btn btn-success btn-sm">
+            <i class="bi bi-download me-1"></i>Download package
+        </button>
+    </div>
 </div>
-<div class="my-2"> 
-    <label class="form-label" for="pbkdfCipherText">Encrypted text</label>
-    <textarea v-model="pbkdfCipherText" name="pbkdfCipherText" id="pbkdfCipherText" class="form-control"></textarea>                                
+
+<!-- ── Decrypt screen ─────────────────────────────────── -->
+<div v-if="pbkdfMode === 'decrypt'">
+    <a href="#" class="small text-secondary d-inline-block mb-3" v-on:click.prevent="goBack()">
+        <i class="bi bi-arrow-left me-1"></i>Back
+    </a>
+    <div class="mb-3">
+        <label class="form-label">Encrypted package file</label>
+        <label class="btn btn-secondary d-block text-start" style="cursor:pointer">
+            <i class="bi bi-folder2-open me-2"></i>Load encrypted package…
+            <input type="file" accept=".json" class="d-none" v-on:change="loadPbkdfPackageFile">
+        </label>
+        <div v-if="pbkdfLoadError" class="form-text text-danger mt-1">{{ pbkdfLoadError }}</div>
+    </div>
+    <div v-if="pbkdfCipherText" class="alert alert-info d-flex align-items-center gap-2 py-2 mb-3">
+        <i class="bi bi-file-earmark-lock-fill"></i>
+        <div>Package loaded — enter your password and iterations to decrypt.</div>
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Iterations</label>
+        <input v-model.number="pbkdfIterations" type="number" min="600000" max="1000000" step="1000" class="form-control">
+        <div class="form-text">Must match the value used when encrypting.</div>
+    </div>
+    <div class="mb-3">
+        <label class="form-label" for="pbkdfDecPassword">Password</label>
+        <div class="input-group">
+            <input v-model="pbkdfPassword"
+                   v-bind:type="pbkdfPasswordVisible ? 'text' : 'password'"
+                   class="form-control" id="pbkdfDecPassword">
+            <i class="input-group-text" style="cursor:pointer"
+               v-bind:class="pbkdfPasswordVisible ? 'bi bi-eye' : 'bi bi-eye-slash'"
+               v-on:click="togglePbkdfPassword()"></i>
+        </div>
+    </div>
+    <div class="mb-3">
+        <button type="button" v-on:click="pbkdfDecrypt" class="btn btn-primary">
+            <i class="bi bi-unlock-fill me-1"></i>Decrypt
+        </button>
+    </div>
+    <div v-if="pbkdfError" class="alert alert-danger py-2">{{ pbkdfError }}</div>
+    <div v-if="pbkdfDecryptFailed" class="alert alert-danger">
+        <i class="bi bi-x-circle-fill me-1"></i>
+        Decryption failed. Check that you are using the correct password and the correct file.
+    </div>
+    <div v-if="pbkdfPlainText" class="mb-3">
+        <label class="form-label">Decrypted message</label>
+        <textarea v-bind:value="pbkdfPlainText" class="form-control" rows="6" readonly></textarea>
+    </div>
 </div>
-<div class="my-2"> 
-    <label class="form-label" for="pbkdfIV">Random IV</label>
-    <textarea v-model="pbkdfIV" name="pbkdfIV" id="pbkdfIV" class="form-control"></textarea>                                
-</div>
-<div class="my-2"> 
-    <label class="form-label" for="pbkdfSalt">Random Salt</label>
-    <textarea v-model="pbkdfSalt" name="pbkdfSalt" id="pbkdfSalt" class="form-control"></textarea>                                
-</div>
-<div class="my-2"> 
-    <label class="form-label" for="pbkdfPlainText">Plain text</label>
-    <textarea v-model="pbkdfPlainText" name="pbkdfPlainText" id="pbkdfPlainText" class="form-control"></textarea>
-    <div class="form-text text-danger" v-if="pbkdfDecryptFailed">Decryption failed</div>
-</div>
-<div class="my-2">
-    <button type="button" v-on:click="pbkdfEncrypt" class="btn btn-warning ms-2 ">Encrypt</button>
-    <button type="button" v-on:click="pbkdfDecrypt" class="btn btn-primary ms-2 ">Decrypt</button>
-</div>
-</div>    
-`
-    
+
+</div>`
+
 };
 
 
@@ -172,7 +333,7 @@ const LoadMyKeysForm = {
         return {
             loadKeyPastedText: '',
             loadKeyPassword: '',
-            loadKeyIterations: 100000,
+            loadKeyIterations: 600000,
             loadKeyPasswordVisible: false
         }
     },
@@ -248,7 +409,7 @@ const LoadMyKeysForm = {
     </div>
     <div class="col-md-6"> 
         <label class="form-label" for="loadKeyIterations">Secret number</label>
-        <input v-model="loadKeyIterations" type="number"  min="1000" max="100000" class="form-control" id="loadKeyIterations" aria-describedby="loadKeyIterationsHelp" required="">
+        <input v-model.number="loadKeyIterations" type="number" min="600000" max="1000000" step="1000" class="form-control" id="loadKeyIterations" aria-describedby="loadKeyIterationsHelp" required="">
         <div id="loadKeyIterationsHelp" class="form-text">The number entered while creating the key</div>
     </div>
 </div>     
@@ -266,9 +427,10 @@ const CreateNewKeysForm = {
         return {
             newKeyName: '',
             newKeyPassword: '',
-            newKeyIterations: 100000,
+            newKeyIterations: 600000,
             newKeyPasswordVisible: false,
-            newKeyInfo: null
+            newKeyInfo: null,
+            newKeyError: null
         };              
     },
     methods: {
@@ -280,6 +442,20 @@ const CreateNewKeysForm = {
          * 
          */
         async createNewKeySet(){
+            this.newKeyError = null;
+            if (!this.newKeyName.trim()) {
+                this.newKeyError = 'Enter a key name.';
+                return;
+            }
+            if (!this.newKeyPassword) {
+                this.newKeyError = 'Enter a password.';
+                return;
+            }
+            const iters = Number(this.newKeyIterations);
+            if (!Number.isInteger(iters) || iters < 600000 || iters > 1000000) {
+                this.newKeyError = 'Iterations must be a whole number between 600,000 and 1,000,000.';
+                return;
+            }
             let jwks = {
                 public:{keys:[]},
                 private:{keys:[]}
@@ -300,8 +476,7 @@ const CreateNewKeysForm = {
             const b64 = new SBO_Base64(false);
 
             let salt = SBO_CryptoUtils.getRandomBytes(16);
-            //let aesIv = SBO_PBKDF2.generateIVForAES(this.newKeyPassword, salt, this.newKeyIterations);
-            let aesIv = SBO_CryptoUtils.getRandomBytes(16);
+            let aesIv = SBO_CryptoUtils.getRandomBytes(12);
 
             const jwksString = JSON.stringify(jwks);
 
@@ -340,14 +515,15 @@ const CreateNewKeysForm = {
     </div>
     <div id="newKeyPasswordHelp" class="form-text">You will NOT be able to use/recover your key if you forget this password</div>
 </div>
-<div class="my-2"> 
-    <label class="form-label" for="newKeyIterations">Enter a number between 1000 and 100000</label>
-    <input v-model="newKeyIterations" type="number"  min="1000" max="100000" class="form-control" id="newKeyIterations" aria-describedby="newKeyIterationsHelp" required="">
-    <div id="newKeyIterationsHelp" class="form-text">You will NOT be able to use/recover your key if you forget this number. Larger is slower but safer</div>
+<div class="my-2">
+    <label class="form-label" for="newKeyIterations">Iterations</label>
+    <input v-model.number="newKeyIterations" type="number" min="600000" max="1000000" step="1000" class="form-control" id="newKeyIterations" aria-describedby="newKeyIterationsHelp">
+    <div id="newKeyIterationsHelp" class="form-text">You will NOT be able to use/recover your key if you forget this number.</div>
 </div>
 <div class="my-2">
     <button type="button" v-on:click="createNewKeySet()" class="btn btn-primary">Create new key set</button>
 </div>
+<div v-if="newKeyError" class="alert alert-danger py-2">{{ newKeyError }}</div>
 <div v-if="newKeyInfo">
     <div class="my-2"> 
         <div class="alert alert-light">
@@ -621,7 +797,7 @@ const DecryptForm = {
 
 /**
  * Encrypts a file or text message for one or more recipients using:
- * - AES-CBC for content encryption
+ * - AES-GCM for content encryption (authenticated encryption)
  * - RSA-OAEP to wrap the AES key per recipient
  * - RSASSA-PKCS1-v1_5 to sign the whole package with the user's own key
  */
@@ -689,7 +865,7 @@ const EncryptForm = {
                     originalName = 'message.txt';
                 }
 
-                // 2. Generate a random AES-CBC content encryption key (CEK)
+                // 2. Generate a random AES-GCM content encryption key (CEK)
                 const aesKey = await window.crypto.subtle.generateKey(
                     { name: SBO_AES_ALG_NAME, length: 256 },
                     true,

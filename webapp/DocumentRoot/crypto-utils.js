@@ -193,7 +193,7 @@ class SBO_CryptoUtils {
             sum += uint8array[i];
             fourpiecesum[i%4]=fourpiecesum[i%4]+uint8array[i];
         }
-        const hashstr = hexEncode(uint8array);
+        const hashstr = SBO_CryptoUtils.hexEncode(uint8array);
         const splithash = hashstr.match(/.{1,2}/g);
 
         const rv ={
@@ -299,7 +299,7 @@ class SBO_AESEncrypt {
             this.iv = ivOptionalByteArray;
         }
         else{
-            this.iv = SBO_CryptoUtils.getRandomBytes(16);
+            this.iv = SBO_CryptoUtils.getRandomBytes(12);
         }
         
         const alg = {
@@ -380,19 +380,6 @@ class SBO_AESDecrypt{
         }
     }
     
-    static async decryptORG(ciphertextBase64Encoded /* string */, ivData /* ArrayBuffer */, keyData /* ArrayBuffer */, aesAlgName /* string */){
-        const algo =  {name: aesAlgName, iv: ivData};
-        //CryptoKey 
-        const importedKey= await window.crypto.subtle.importKey('raw', keyData, algo, false, ['decrypt']);
-        const b64 = new SBO_Base64(false);
-        const ciphertextBytes = b64.decodeAsByteArray(ciphertextBase64Encoded);
-        //ArrayBuffer
-        const plainTextBuffer = await window.crypto.subtle.decrypt(algo, importedKey, ciphertextBytes);
-        const txtDecoder = new TextDecoder();
-        const rv = txtDecoder.decode(plainTextBuffer);
-        return rv;
-    }
-    
 }
 
 class SBO_PBKDF2{
@@ -414,14 +401,12 @@ class SBO_PBKDF2{
         const keyFromPassword = await window.crypto.subtle.importKey('raw', passwordBuffer, {name: 'PBKDF2'}, false, usages);
         //CryptoKey
         const derivedKey = await window.crypto.subtle.deriveKey(
-            { "name": 'PBKDF2', "salt": saltBuffer, "iterations": iterations+100, "hash": 'SHA-256'},
+            { "name": 'PBKDF2', "salt": saltBuffer, "iterations": iterations, "hash": 'SHA-256'},
             keyFromPassword,
             { "name": aesAlgName, "length": 128 },
             true,
             [ "encrypt", "decrypt" ]);
         //const exportedKey : CryptoKey = await window.crypto.subtle.exportKey('raw', derivedKey);
-        console.log('SBO_PBKDF2.generateKey derivedKey:');
-        console.log(derivedKey);
         return derivedKey;
     }
 
@@ -430,7 +415,7 @@ class SBO_PBKDF2{
         var txtEncoder = new TextEncoder();
         let passwordBuffer = txtEncoder.encode(password);
         let saltBuffer = null; 
-        if(salt instanceof TypedArray){
+        if(ArrayBuffer.isView(salt)){
             saltBuffer = salt;
         }
         else{

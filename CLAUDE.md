@@ -1,4 +1,4 @@
-# NHI Manager — Claude Code Context
+# SBOSecure — Claude Code Context
 
 This file is read automatically by Claude Code at the start of every session.
 Put things here that Claude should always know: conventions, constraints, patterns
@@ -29,7 +29,7 @@ It's like a simple browser based PGP software but it uses only only javascript a
 
 ```
 DocumentRoot/
-├── index.html               # Collector plugin system
+├── index.html               # Application home page
 
 containers/     # docker container for development
 ```
