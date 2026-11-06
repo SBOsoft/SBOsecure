@@ -207,6 +207,34 @@ class SBO_CryptoUtils {
 
 
     /**
+     * Computes an RFC 7638 style SHA-256 thumbprint of an RSA JWK, hex encoded.
+     * Only the public members (e, kty, n) are hashed, so a private JWK and its
+     * matching public JWK produce the same value.
+     * Throws if the input is not an RSA JWK, so malformed keys never get a fingerprint.
+     * @param {JsonWebKey} jwk
+     * @returns {Promise<string>} lowercase hex string
+     */
+    static async jwkThumbprint(jwk){
+        if (!jwk || jwk.kty !== 'RSA' || typeof jwk.n !== 'string' || typeof jwk.e !== 'string' || !jwk.n || !jwk.e) {
+            throw new Error('jwkThumbprint: not an RSA JWK');
+        }
+        // Members must be in lexicographic order with no whitespace (RFC 7638 §3)
+        const canonical = JSON.stringify({ e: jwk.e, kty: jwk.kty, n: jwk.n });
+        const hashBuffer = await SBO_CryptoUtils.sha256(canonical);
+        return SBO_CryptoUtils.hexEncode(new Uint8Array(hashBuffer));
+    }
+
+    /**
+     * Formats a hex thumbprint for display: first 32 hex digits, upper case, in groups of 4.
+     * @param {string} hex
+     * @returns {string}
+     */
+    static formatFingerprint(hex){
+        if (!hex) return '';
+        return hex.slice(0, 32).toUpperCase().match(/.{1,4}/g).join(' ');
+    }
+
+    /**
      * @returns {JsonWebKey}
      */
     static async exportCryptoKeyAsJwk(cryptoKey){

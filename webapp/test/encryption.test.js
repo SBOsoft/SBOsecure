@@ -12,6 +12,9 @@ function loadFixture(name) {
     return JSON.parse(readFileSync(join(fixturesDir, name), 'utf-8'))
 }
 
+// Use the same AES algorithm as the app (crypto.js) so the tests follow any change there
+const AES_ALG = getClasses().SBO_AES_ALG_NAME
+
 // ---------------------------------------------------------------------------
 // SBO_Base64
 // ---------------------------------------------------------------------------
@@ -53,7 +56,7 @@ describe('SBO_AESEncrypt / SBO_AESDecrypt', () => {
 
     beforeAll(async () => {
         aesKey = await webcrypto.subtle.generateKey(
-            { name: 'AES-CBC', length: 256 },
+            { name: AES_ALG, length: 256 },
             true,
             ['encrypt', 'decrypt']
         )
@@ -61,11 +64,11 @@ describe('SBO_AESEncrypt / SBO_AESDecrypt', () => {
 
     it('round-trips a text message', async () => {
         const { SBO_AESEncrypt, SBO_AESDecrypt } = getClasses()
-        const plaintext = 'Secret message for testing AES-CBC round-trip.'
+        const plaintext = 'Secret message for testing AES round-trip.'
         const bytes = new TextEncoder().encode(plaintext)
 
         const enc = new SBO_AESEncrypt()
-        await enc.encrypt(bytes, 'AES-CBC', aesKey)
+        await enc.encrypt(bytes, AES_ALG, aesKey)
 
         const cipherB64 = enc.getCipherTextBase64Encoded()
         const ivB64     = enc.getIVBase64Encoded()
@@ -74,7 +77,7 @@ describe('SBO_AESEncrypt / SBO_AESDecrypt', () => {
         expect(ivB64).toBeTruthy()
         expect(cipherB64).not.toContain(plaintext)
 
-        const decrypted = await SBO_AESDecrypt.decrypt(cipherB64, ivB64, aesKey, 'AES-CBC')
+        const decrypted = await SBO_AESDecrypt.decrypt(cipherB64, ivB64, aesKey, AES_ALG)
         expect(decrypted).toBe(plaintext)
     })
 
@@ -84,8 +87,8 @@ describe('SBO_AESEncrypt / SBO_AESDecrypt', () => {
 
         const enc1 = new SBO_AESEncrypt()
         const enc2 = new SBO_AESEncrypt()
-        await enc1.encrypt(bytes, 'AES-CBC', aesKey)
-        await enc2.encrypt(bytes, 'AES-CBC', aesKey)
+        await enc1.encrypt(bytes, AES_ALG, aesKey)
+        await enc2.encrypt(bytes, AES_ALG, aesKey)
 
         expect(enc1.getCipherTextBase64Encoded()).not.toBe(enc2.getCipherTextBase64Encoded())
     })
@@ -93,15 +96,91 @@ describe('SBO_AESEncrypt / SBO_AESDecrypt', () => {
     it('returns null when decrypted with the wrong key', async () => {
         const { SBO_AESEncrypt, SBO_AESDecrypt } = getClasses()
         const wrongKey = await webcrypto.subtle.generateKey(
-            { name: 'AES-CBC', length: 256 }, true, ['encrypt', 'decrypt']
+            { name: AES_ALG, length: 256 }, true, ['encrypt', 'decrypt']
         )
         const enc = new SBO_AESEncrypt()
-        await enc.encrypt(new TextEncoder().encode('text'), 'AES-CBC', aesKey)
+        await enc.encrypt(new TextEncoder().encode('text'), AES_ALG, aesKey)
 
         const result = await SBO_AESDecrypt.decrypt(
-            enc.getCipherTextBase64Encoded(), enc.getIVBase64Encoded(), wrongKey, 'AES-CBC'
+            enc.getCipherTextBase64Encoded(), enc.getIVBase64Encoded(), wrongKey, AES_ALG
         )
         expect(result).toBeNull()
+    })
+
+    it('returns null when the ciphertext was tampered with', async () => {
+        const { SBO_AESEncrypt, SBO_AESDecrypt, SBO_Base64 } = getClasses()
+        const b64 = new SBO_Base64(false)
+        const enc = new SBO_AESEncrypt()
+        await enc.encrypt(new TextEncoder().encode('authenticated text'), AES_ALG, aesKey)
+
+        // Flip one bit; AES-GCM authentication must reject the result
+        const bytes = b64.decodeAsByteArray(enc.getCipherTextBase64Encoded())
+        bytes[0] ^= 0x01
+        const result = await SBO_AESDecrypt.decrypt(
+            b64.encodeBytes(bytes), enc.getIVBase64Encoded(), aesKey, AES_ALG
+        )
+        expect(result).toBeNull()
+    })
+
+    it('round-trips binary content with decryptAsBuffer', async () => {
+        const { SBO_AESEncrypt, SBO_AESDecrypt } = getClasses()
+        const bytes = new Uint8Array([0, 255, 128, 1, 0xc3, 0x28, 0xff, 0xfe])  // not valid UTF-8
+        const enc = new SBO_AESEncrypt()
+        await enc.encrypt(bytes, AES_ALG, aesKey)
+
+        const buf = await SBO_AESDecrypt.decryptAsBuffer(
+            enc.getCipherTextBase64Encoded(), enc.getIVBase64Encoded(), aesKey, AES_ALG
+        )
+        expect(Array.from(new Uint8Array(buf))).toEqual(Array.from(bytes))
+    })
+})
+
+// ---------------------------------------------------------------------------
+// SBO_CryptoUtils – key fingerprints
+// ---------------------------------------------------------------------------
+
+describe('SBO_CryptoUtils fingerprints', () => {
+    it('matches the RFC 7638 example thumbprint', async () => {
+        const { SBO_CryptoUtils } = getClasses()
+        // Example key from RFC 7638 section 3.1
+        const jwk = {
+            kty: 'RSA',
+            e: 'AQAB',
+            n: '0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw'
+        }
+        const hex = await SBO_CryptoUtils.jwkThumbprint(jwk)
+        expect(Buffer.from(hex, 'hex').toString('base64url')).toBe('NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs')
+    })
+
+    it('gives the same fingerprint for a private key and its public key', async () => {
+        const { SBO_CryptoUtils } = getClasses()
+        const keyset = loadFixture('recipient-keyset.jwks.json')
+        const pub  = keyset.public.keys.find(k => k.key_ops && k.key_ops.includes('encrypt'))
+        const priv = keyset.private.keys.find(k => k.key_ops && k.key_ops.includes('decrypt'))
+        expect(await SBO_CryptoUtils.jwkThumbprint(priv)).toBe(await SBO_CryptoUtils.jwkThumbprint(pub))
+    })
+
+    it('gives different fingerprints for different keys', async () => {
+        const { SBO_CryptoUtils } = getClasses()
+        const a = loadFixture('recipient-keyset.jwks.json').public.keys[0]
+        const b = loadFixture('sender-keyset.jwks.json').public.keys[0]
+        expect(await SBO_CryptoUtils.jwkThumbprint(a)).not.toBe(await SBO_CryptoUtils.jwkThumbprint(b))
+    })
+
+    it('rejects malformed or non-RSA keys instead of fingerprinting them', async () => {
+        const { SBO_CryptoUtils } = getClasses()
+        await expect(SBO_CryptoUtils.jwkThumbprint(null)).rejects.toThrow()
+        await expect(SBO_CryptoUtils.jwkThumbprint('not a key')).rejects.toThrow()
+        await expect(SBO_CryptoUtils.jwkThumbprint({})).rejects.toThrow()
+        await expect(SBO_CryptoUtils.jwkThumbprint({ kty: 'EC', x: 'a', y: 'b' })).rejects.toThrow()
+        await expect(SBO_CryptoUtils.jwkThumbprint({ kty: 'RSA', e: 'AQAB' })).rejects.toThrow()
+    })
+
+    it('formats a fingerprint as 8 upper-case groups of 4', () => {
+        const { SBO_CryptoUtils } = getClasses()
+        const hex = 'abcdef0123456789'.repeat(4)
+        expect(SBO_CryptoUtils.formatFingerprint(hex)).toBe('ABCD EF01 2345 6789 ABCD EF01 2345 6789')
+        expect(SBO_CryptoUtils.formatFingerprint(null)).toBe('')
     })
 })
 
@@ -122,7 +201,7 @@ describe('SBO_RSAOAEP key wrapping', () => {
 
         // Generate a CEK (Content Encryption Key)
         const cek = await webcrypto.subtle.generateKey(
-            { name: 'AES-CBC', length: 256 }, true, ['encrypt', 'decrypt']
+            { name: AES_ALG, length: 256 }, true, ['encrypt', 'decrypt']
         )
         const rawCek = await webcrypto.subtle.exportKey('raw', cek)
 
@@ -156,7 +235,7 @@ describe('SBO_RSAOAEP key wrapping', () => {
             k => k.key_ops && k.key_ops.includes('encrypt')
         )
 
-        const cek    = await webcrypto.subtle.generateKey({ name: 'AES-CBC', length: 256 }, true, ['encrypt', 'decrypt'])
+        const cek    = await webcrypto.subtle.generateKey({ name: AES_ALG, length: 256 }, true, ['encrypt', 'decrypt'])
         const rawCek = await webcrypto.subtle.exportKey('raw', cek)
         const pubKey = await rsa.importJwkPublicKey(encPubJwk)
         const wrapped = await rsa.encrypt(pubKey, rawCek)
@@ -247,18 +326,18 @@ describe('Full encryption flow', () => {
 
     /** Mirrors EncryptForm.encrypt() — returns the final package object */
     async function encryptForContacts(plaintext, contacts, myKeys) {
-        const { SBO_AESEncrypt, SBO_RSAOAEP, SBO_RSASSAPKCS1v15, SBO_Base64 } = getClasses()
+        const { SBO_AESEncrypt, SBO_RSAOAEP, SBO_RSASSAPKCS1v15, SBO_Base64, SBO_CryptoUtils } = getClasses()
 
         const contentBytes = new TextEncoder().encode(plaintext)
 
         // Generate CEK
         const cek = await webcrypto.subtle.generateKey(
-            { name: 'AES-CBC', length: 256 }, true, ['encrypt', 'decrypt']
+            { name: AES_ALG, length: 256 }, true, ['encrypt', 'decrypt']
         )
 
         // Encrypt content
         const aesEnc = new SBO_AESEncrypt()
-        await aesEnc.encrypt(contentBytes, 'AES-CBC', cek)
+        await aesEnc.encrypt(contentBytes, AES_ALG, cek)
 
         const rawCek = await webcrypto.subtle.exportKey('raw', cek)
         const b64    = new SBO_Base64(false)
@@ -273,6 +352,7 @@ describe('Full encryption flow', () => {
             const wrapped   = await rsa.encrypt(pubKey, rawCek)
             encryptedKeys.push({
                 recipientName: contact.name,
+                keyId: await SBO_CryptoUtils.jwkThumbprint(encKeyJwk),
                 encryptedKey: b64.encodeBytes(new Uint8Array(wrapped))
             })
         }
@@ -283,7 +363,8 @@ describe('Full encryption flow', () => {
             encryptedContent: {
                 ciphertext:   aesEnc.getCipherTextBase64Encoded(),
                 iv:           aesEnc.getIVBase64Encoded(),
-                originalName: 'message.txt'
+                originalName: 'message.txt',
+                contentType:  'text/plain'
             },
             encryptedKeys
         }
@@ -318,14 +399,14 @@ describe('Full encryption flow', () => {
         const rawCek    = await rsa.decrypt(privKey, wrapped)
 
         const cek = await webcrypto.subtle.importKey(
-            'raw', rawCek, { name: 'AES-CBC' }, false, ['decrypt']
+            'raw', rawCek, { name: AES_ALG }, false, ['decrypt']
         )
 
         return SBO_AESDecrypt.decrypt(
             pkg.encryptedContent.ciphertext,
             pkg.encryptedContent.iv,
             cek,
-            'AES-CBC'
+            AES_ALG
         )
     }
 
@@ -339,6 +420,8 @@ describe('Full encryption flow', () => {
         expect(pkg.encryptedContent.originalName).toBe('message.txt')
         expect(pkg.encryptedKeys).toHaveLength(1)
         expect(pkg.encryptedKeys[0].recipientName).toBe('Alice Test')
+        expect(pkg.encryptedKeys[0].keyId).toMatch(/^[0-9a-f]{64}$/)
+        expect(pkg.encryptedContent.contentType).toBe('text/plain')
         expect(pkg.signature).toBeTruthy()
         expect(pkg.signerPublicKey).toBeTruthy()
     })
@@ -405,11 +488,21 @@ describe('Full encryption flow', () => {
         // Alice's entry is first
         const wrapped = b64.decodeAsByteArray(pkg.encryptedKeys[0].encryptedKey)
         const rawCek  = await rsa.decrypt(privKey, wrapped)
-        const cek     = await webcrypto.subtle.importKey('raw', rawCek, { name: 'AES-CBC' }, false, ['decrypt'])
+        const cek     = await webcrypto.subtle.importKey('raw', rawCek, { name: AES_ALG }, false, ['decrypt'])
         const result  = await SBO_AESDecrypt.decrypt(
-            pkg.encryptedContent.ciphertext, pkg.encryptedContent.iv, cek, 'AES-CBC'
+            pkg.encryptedContent.ciphertext, pkg.encryptedContent.iv, cek, AES_ALG
         )
         expect(result).toBe(plaintext)
+    })
+
+    it('recipient keyId matches the fingerprint of the recipient\'s own private key', async () => {
+        const { SBO_CryptoUtils } = getClasses()
+        const pkg = await encryptForContacts('fingerprinted', [aliceContact], senderKeyset)
+        const alicePriv = recipientKeyset.private.keys.find(k => k.key_ops && k.key_ops.includes('decrypt'))
+        const senderPriv = senderKeyset.private.keys.find(k => k.key_ops && k.key_ops.includes('decrypt'))
+
+        expect(pkg.encryptedKeys[0].keyId).toBe(await SBO_CryptoUtils.jwkThumbprint(alicePriv))
+        expect(pkg.encryptedKeys[0].keyId).not.toBe(await SBO_CryptoUtils.jwkThumbprint(senderPriv))
     })
 
     it('wrong recipient cannot decrypt', async () => {

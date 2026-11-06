@@ -136,6 +136,81 @@ body {
     border-color: #a8d5b5;
 }
 
+/* Round icon button that opens the documentation panel */
+.sbo-help-btn {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--c-text-2);
+    font-size: 20px;
+    cursor: pointer;
+}
+
+.sbo-help-btn:hover,
+.sbo-help-btn:focus-visible {
+    background: var(--c-primary-bg);
+    color: var(--c-primary);
+}
+
+/* ── Documentation side panel ───────────────────────────── */
+.sbo-docs {
+    --bs-offcanvas-width: 380px;
+    box-shadow: var(--elev-2);
+}
+
+.sbo-docs .offcanvas-header {
+    border-bottom: 1px solid var(--c-outline);
+}
+
+.sbo-docs .offcanvas-title {
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.sbo-docs .offcanvas-body {
+    font-size: 13px;
+    color: var(--c-text);
+}
+
+.sbo-doc-section {
+    padding: 12px 12px 4px;
+    margin-bottom: 8px;
+    border-left: 3px solid transparent;
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+
+/* Section describing the tab currently shown */
+.sbo-doc-section.current {
+    border-left-color: var(--c-primary);
+    background: var(--c-primary-bg);
+}
+
+.sbo-doc-section h6 {
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+
+.sbo-doc-section ul,
+.sbo-doc-section ol {
+    padding-left: 18px;
+}
+
+.sbo-doc-warn {
+    font-size: 12px;
+    color: var(--c-yellow);
+    background: var(--c-yellow-bg);
+    border-radius: var(--r-xs);
+    padding: 6px 10px;
+    margin-bottom: 12px;
+}
+
 /* ── Material tabs navigation ───────────────────────────── */
 .sbo-nav {
     /*position: sticky;

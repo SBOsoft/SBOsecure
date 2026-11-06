@@ -181,7 +181,7 @@ const PBKDFEncryptDecrypt = {
     <div class="col-sm-6">
         <div class="border rounded p-4 text-center h-100" style="cursor:pointer"
              v-on:click="pbkdfMode = 'encrypt'">
-            <i class="bi bi-lock-fill fs-1 text-warning d-block mb-2"></i>
+            <i class="bi bi-lock-fill fs-1 text-warning-emphasis d-block mb-2"></i>
             <div class="fw-semibold">Encrypt a message</div>
             <div class="text-secondary small mt-1">Lock text with a password. Share the resulting file with the recipient.</div>
         </div>
@@ -596,7 +596,7 @@ const ContactInfo = {
  * Verifies the signature when present.
  */
 const DecryptForm = {
-    props: ['myKeys'],
+    props: ['myKeys', 'myContacts'],
     emits: ['encrypt-with-text'],
     data() {
         return {
@@ -605,11 +605,14 @@ const DecryptForm = {
             selectedFile: null,
             decrypting: false,
             decryptError: null,
+            noMatchingKey: false,   // true when decryption failed because no loaded key fits
+            details: null,          // contents of the document details modal, see buildDetails()
             decryptedText: null,
             decryptedBuffer: null,
             decryptedFileName: null,
             decryptedContentType: null,
-            signatureStatus: null   // null | 'valid' | 'invalid' | 'unsigned' | 'error'
+            signatureStatus: null,  // null | 'valid' | 'invalid' | 'unsigned' | 'error'
+            signer: null            // who signed a valid package, see identifySigner()
         };
     },
     computed: {
@@ -642,7 +645,40 @@ const DecryptForm = {
                    !this.decrypting;
         }
     },
+    watch: {
+        // A different package makes the previous result and error meaningless
+        packageJson() {
+            this.resetResult();
+        },
+        // A "no matching key" failure is stale once the set of loaded keys changes; the user must retry
+        'myKeys.length'() {
+            if (this.noMatchingKey) {
+                this.noMatchingKey = false;
+                this.decryptError = null;
+            }
+            this.refreshSigner();
+        },
+        // Adding or editing a contact can change who a valid signature is attributed to
+        myContacts: {
+            deep: true,
+            handler() {
+                this.refreshSigner();
+            }
+        }
+    },
     methods: {
+        /**
+         * Re-identifies the signer of the current valid package against the current keys and contacts.
+         */
+        async refreshSigner() {
+            const pkg = this.parsedPackage;
+            if (this.signatureStatus !== 'valid' || !pkg) return;
+            this.signer = this.identifySigner(
+                await this.safeThumbprint(pkg.signerPublicKey),
+                await this.collectLoadedKeyFingerprints(),
+                await this.collectContactFingerprints()
+            );
+        },
         onFileSelected(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -655,11 +691,13 @@ const DecryptForm = {
         },
         resetResult() {
             this.decryptError = null;
+            this.noMatchingKey = false;
             this.decryptedText = null;
             this.decryptedBuffer = null;
             this.decryptedFileName = null;
             this.decryptedContentType = null;
             this.signatureStatus = null;
+            this.signer = null;
         },
         async decrypt() {
             this.resetResult();
@@ -692,6 +730,7 @@ const DecryptForm = {
                 }
 
                 if (!rawCek) {
+                    this.noMatchingKey = true;
                     throw new Error(
                         'None of your loaded keys can decrypt this package. ' +
                         'You are not among the recipients, or the wrong key is loaded.'
@@ -747,6 +786,9 @@ const DecryptForm = {
                     } catch {
                         this.signatureStatus = 'error';
                     }
+                    // The signing key travels inside the package, so anyone can produce a "valid" signature.
+                    // Only a match with a known key tells the user who actually signed it.
+                    await this.refreshSigner();
                 }
 
             } catch (err) {
@@ -771,7 +813,220 @@ const DecryptForm = {
         },
         encryptDecryptedText() {
             this.$emit('encrypt-with-text', this.decryptedText);
+        },
+        formatFingerprint(hex) {
+            return SBO_CryptoUtils.formatFingerprint(hex);
+        },
+        /**
+         * Fingerprint of a JWK, or null if the key is missing or malformed.
+         */
+        async safeThumbprint(jwk) {
+            if (!jwk) return null;
+            try {
+                return await SBO_CryptoUtils.jwkThumbprint(jwk);
+            } catch {
+                return null;
+            }
+        },
+        /**
+         * Returns the first JWK in the list whose key_ops contains the given operation, or null.
+         */
+        findJwkByOp(keys, op) {
+            if (!keys) return null;
+            for (const k of keys) {
+                if (k.key_ops && k.key_ops.includes(op)) return k;
+            }
+            return null;
+        },
+        /**
+         * Fingerprints of the user's loaded keys (decryption and signing halves).
+         */
+        async collectLoadedKeyFingerprints() {
+            const result = [];
+            for (const myKey of (this.myKeys || [])) {
+                const decJwk = this.findJwkByOp(myKey.jwks.private.keys, 'decrypt');
+                const verifyJwk = this.findJwkByOp(myKey.jwks.public.keys, 'verify');
+                result.push({
+                    name: myKey.downloadable.name || '(unnamed key)',
+                    created: SBO_FormatTimestampSeconds(myKey.downloadable.created),
+                    encKeyId: await this.safeThumbprint(decJwk),
+                    signKeyId: await this.safeThumbprint(verifyJwk)
+                });
+            }
+            return result;
+        },
+        /**
+         * Fingerprints of the public keys stored in the user's contacts.
+         * Contacts with unparsable key data are skipped.
+         */
+        async collectContactFingerprints() {
+            const result = [];
+            for (const contact of (this.myContacts || [])) {
+                if (!contact || !contact.jwks) continue;
+                let jwks;
+                try {
+                    jwks = JSON.parse(contact.jwks);
+                } catch {
+                    continue;
+                }
+                const encJwk = this.findJwkByOp(jwks.keys, 'encrypt');
+                const verifyJwk = this.findJwkByOp(jwks.keys, 'verify');
+                result.push({
+                    name: contact.name || '(unnamed contact)',
+                    encKeyId: await this.safeThumbprint(encJwk),
+                    signKeyId: await this.safeThumbprint(verifyJwk)
+                });
+            }
+            return result;
+        },
+        /**
+         * Returns the name of the first entry whose given fingerprint field equals keyId, or null.
+         */
+        findNameByKeyId(entries, field, keyId) {
+            if (!keyId) return null;
+            for (const e of entries) {
+                if (e[field] === keyId) return e.name;
+            }
+            return null;
+        },
+        /**
+         * Matches a signer key fingerprint against the loaded keys and contacts.
+         * Returns { keyId, matchedKeyName, matchedContactName }; both names are null for an unknown signer.
+         */
+        identifySigner(signerKeyId, loadedKeys, contacts) {
+            return {
+                keyId: signerKeyId,
+                matchedKeyName: this.findNameByKeyId(loadedKeys, 'signKeyId', signerKeyId),
+                matchedContactName: this.findNameByKeyId(contacts, 'signKeyId', signerKeyId)
+            };
+        },
+        /**
+         * Compares what the package expects (recipient keys, signer) with the loaded keys
+         * and contacts, and produces human readable hints about why decryption might fail.
+         */
+        async buildDetails() {
+            const pkg = this.parsedPackage;
+            if (!pkg) return null;
+
+            const loadedKeys = await this.collectLoadedKeyFingerprints();
+            const contacts = await this.collectContactFingerprints();
+
+            // Recipients the package was encrypted for
+            const recipients = [];
+            let anyRecipientMatches = false;
+            let legacyRecipients = 0;
+            for (const entry of (pkg.encryptedKeys || [])) {
+                const keyId = entry.keyId || null;
+                if (!keyId) legacyRecipients++;
+                const matchedKeyName = this.findNameByKeyId(loadedKeys, 'encKeyId', keyId);
+                if (matchedKeyName) anyRecipientMatches = true;
+                recipients.push({
+                    name: entry.recipientName || '(unnamed)',
+                    keyId: keyId,
+                    matchedKeyName: matchedKeyName,
+                    matchedContactName: this.findNameByKeyId(contacts, 'encKeyId', keyId)
+                });
+            }
+
+            // Signer of the package
+            let signer = null;
+            if (pkg.signerPublicKey) {
+                signer = this.identifySigner(
+                    await this.safeThumbprint(pkg.signerPublicKey), loadedKeys, contacts
+                );
+            }
+
+            const hints = this.buildHints(loadedKeys, recipients, signer, anyRecipientMatches, legacyRecipients);
+
+            return {
+                originalName: pkg.encryptedContent && pkg.encryptedContent.originalName,
+                contentType: pkg.encryptedContent && pkg.encryptedContent.contentType,
+                version: pkg.version,
+                recipients: recipients,
+                signer: signer,
+                loadedKeys: loadedKeys,
+                hints: hints
+            };
+        },
+        /**
+         * Builds the list of diagnostic hints shown at the top of the details modal.
+         */
+        buildHints(loadedKeys, recipients, signer, anyRecipientMatches, legacyRecipients) {
+            const hints = [];
+            if (loadedKeys.length === 0) {
+                hints.push('No keys are loaded. Load your keyset in the Keys tab.');
+                return hints;
+            }
+            if (recipients.length === 0) {
+                hints.push('The package does not list any recipients.');
+                return hints;
+            }
+
+            if (legacyRecipients > 0) {
+                hints.push('This package was created with an older version of SBOsecure that does not record key ' +
+                    'fingerprints, so only recipient names can be shown. Compare the recipient names with your key name.');
+            }
+
+            if (anyRecipientMatches) {
+                if (this.noMatchingKey) {
+                    hints.push('One of your loaded keys matches a recipient fingerprint, but the content key could not be ' +
+                        'unwrapped. The package may be corrupted or modified.');
+                }
+                return hints;
+            }
+
+            if (legacyRecipients < recipients.length) {
+                hints.push('None of the recipient key fingerprints match a key you have loaded.');
+            }
+
+            // Same name as one of our keys but different fingerprint: sender has a stale/different public key for us
+            for (const r of recipients) {
+                if (!r.keyId) continue;
+                for (const lk of loadedKeys) {
+                    if (r.name.trim().toLowerCase() === lk.name.trim().toLowerCase()) {
+                        hints.push(`Recipient "${r.name}" has the same name as your key "${lk.name}" but a different ` +
+                            'fingerprint. The sender probably has an old or different public key for you. Send them your ' +
+                            'current public key (Keys tab) and ask them to encrypt again.');
+                    }
+                }
+            }
+
+            if (signer && signer.matchedKeyName) {
+                hints.push(`This package was signed with your own key "${signer.matchedKeyName}", so you created it. ` +
+                    'The sender of a package cannot decrypt it unless they also selected themselves as a recipient. ' +
+                    'Add yourself to your contacts with your public key and encrypt again with yourself included.');
+            }
+
+            for (const r of recipients) {
+                if (r.matchedContactName) {
+                    hints.push(`The package was encrypted for your contact "${r.matchedContactName}". Only they can decrypt it.`);
+                }
+            }
+
+            if (legacyRecipients < recipients.length) {
+                hints.push('If you have more than one keyset, load the one whose fingerprint matches a recipient below. ' +
+                    'Otherwise ask the sender to compare the fingerprint they have for you with your fingerprint listed under "Your loaded keys".');
+            }
+            return hints;
+        },
+        /**
+         * Opens the document details modal and fills it in.
+         */
+        async showDetails() {
+            this.details = null;
+            bootstrap.Modal.getOrCreateInstance(this.$refs.detailsModal).show();
+            try {
+                const details = await this.buildDetails();
+                this.details = details || { error: 'Paste or load a valid SBOsecure encrypted package first.' };
+            } catch (err) {
+                console.error('Could not build document details:', err);
+                this.details = { error: 'Could not read the package details.' };
+            }
         }
+    },
+    beforeUnmount() {
+        const modal = bootstrap.Modal.getInstance(this.$refs.detailsModal);
+        if (modal) modal.dispose();
     },
     template: `<div>
 
@@ -804,8 +1059,11 @@ const DecryptForm = {
     <div>
         <strong>Signature:</strong>
         <span v-if="packageInfo.signed">Present</span>
-        <span v-else class="text-warning">None — authenticity cannot be verified</span>
+        <span v-else class="text-danger">None! Authenticity cannot be verified</span>
     </div>
+    <a href="#" class="d-inline-block mt-1" v-on:click.prevent="showDetails">
+        <i class="bi bi-info-circle me-1"></i>Show document details
+    </a>
 </div>
 
 <div v-if="!myKeys || myKeys.length === 0" class="alert alert-warning small p-2 my-2">
@@ -824,11 +1082,31 @@ const DecryptForm = {
 
 <div v-if="decryptError" class="alert alert-danger mt-2">
     <strong>Could not decrypt</strong><br>{{ decryptError }}
+    <div v-if="noMatchingKey" class="mt-2">
+        <a href="#" class="alert-link" v-on:click.prevent="showDetails">
+            <i class="bi bi-search me-1"></i>Find out why — compare the keys this document expects with your loaded keys
+        </a>
+    </div>
 </div>
 
 <div v-if="decryptedText !== null || decryptedBuffer !== null" class="my-2">
     <div class="mb-2">
-        <span v-if="signatureStatus === 'valid'"   class="badge bg-success">Signature valid</span>
+        <template v-if="signatureStatus === 'valid' && signer">
+            <span v-if="signer.matchedContactName" class="badge bg-success">
+                Signature valid — signed by contact "{{ signer.matchedContactName }}"
+            </span>
+            <span v-else-if="signer.matchedKeyName" class="badge bg-success">
+                Signature valid — signed by you ("{{ signer.matchedKeyName }}")
+            </span>
+            <template v-else>
+                <span class="badge bg-warning text-dark">Signature valid, but the signer is not in your contacts</span>
+                <div class="form-text">
+                    Anyone can sign a package, so this does not tell you who sent it.
+                    Add the sender as a contact to confirm it came from them.
+                    <a href="#" v-on:click.prevent="showDetails">Show signer fingerprint</a>
+                </div>
+            </template>
+        </template>
         <span v-if="signatureStatus === 'invalid'" class="badge bg-danger">Signature invalid — content may have been tampered</span>
         <span v-if="signatureStatus === 'error'"   class="badge bg-warning text-dark">Signature could not be verified</span>
         <span v-if="signatureStatus === 'unsigned'" class="badge bg-secondary">No signature</span>
@@ -853,6 +1131,99 @@ const DecryptForm = {
         </div>
     </div>
 </div>
+
+<!-- ── Document details modal ─────────────────────────── -->
+<Teleport to="body">
+<div class="modal fade" ref="detailsModal" tabindex="-1" aria-labelledby="sboDocDetailsTitle" aria-hidden="true">
+<div class="modal-dialog modal-lg modal-dialog-scrollable">
+<div class="modal-content">
+    <div class="modal-header">
+        <h5 class="modal-title" id="sboDocDetailsTitle">Document details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    </div>
+    <div class="modal-body small">
+        <div v-if="!details" class="text-secondary">Reading package…</div>
+        <div v-else-if="details.error" class="alert alert-danger">{{ details.error }}</div>
+        <template v-else>
+
+        <div v-if="details.hints.length > 0" class="alert alert-warning">
+            <div class="fw-semibold mb-1"><i class="bi bi-lightbulb-fill me-1"></i>What might be wrong</div>
+            <ul class="mb-0 ps-3">
+                <li v-for="(hint, i) in details.hints" v-bind:key="i">{{ hint }}</li>
+            </ul>
+        </div>
+
+        <h6 class="mt-3">Package</h6>
+        <table class="table table-sm mb-3">
+            <tbody>
+                <tr><th class="w-25">Original name</th><td>{{ details.originalName || '—' }}</td></tr>
+                <tr><th>Content type</th><td>{{ details.contentType || 'text/plain' }}</td></tr>
+                <tr><th>Format version</th><td>{{ details.version }}</td></tr>
+            </tbody>
+        </table>
+
+        <h6>Expected keys (recipients)</h6>
+        <div class="text-secondary mb-1">A loaded key must match one of these fingerprints to decrypt.</div>
+        <table class="table table-sm mb-3">
+            <thead><tr><th>Recipient</th><th>Key fingerprint</th><th>Status</th></tr></thead>
+            <tbody>
+                <tr v-for="(r, i) in details.recipients" v-bind:key="i">
+                    <td>{{ r.name }}</td>
+                    <td class="font-monospace">
+                        <span v-if="r.keyId">{{ formatFingerprint(r.keyId) }}</span>
+                        <span v-else class="text-secondary">not recorded</span>
+                    </td>
+                    <td>
+                        <span v-if="r.matchedKeyName" class="badge bg-success">Your key "{{ r.matchedKeyName }}"</span>
+                        <span v-else-if="r.matchedContactName" class="badge bg-info text-dark">Contact "{{ r.matchedContactName }}"</span>
+                        <span v-else-if="r.keyId" class="badge bg-danger">No loaded key matches</span>
+                        <span v-else class="badge bg-secondary">Unknown</span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h6>Signed by</h6>
+        <div v-if="!details.signer" class="text-danger mb-3">The package is not signed.</div>
+        <table v-else class="table table-sm mb-3">
+            <tbody>
+                <tr>
+                    <th class="w-25">Key fingerprint</th>
+                    <td class="font-monospace">{{ formatFingerprint(details.signer.keyId) || '—' }}</td>
+                </tr>
+                <tr>
+                    <th>Signer</th>
+                    <td>
+                        <span v-if="details.signer.matchedKeyName" class="badge bg-primary">You ("{{ details.signer.matchedKeyName }}")</span>
+                        <span v-else-if="details.signer.matchedContactName" class="badge bg-info text-dark">Contact "{{ details.signer.matchedContactName }}"</span>
+                        <span v-else class="badge bg-secondary">Not one of your keys or contacts</span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h6>Your loaded keys</h6>
+        <div v-if="details.loadedKeys.length === 0" class="text-warning-emphasis">No keys loaded.</div>
+        <table v-else class="table table-sm mb-0">
+            <thead><tr><th>Name</th><th>Created</th><th>Decryption key fingerprint</th></tr></thead>
+            <tbody>
+                <tr v-for="(k, i) in details.loadedKeys" v-bind:key="i">
+                    <td>{{ k.name }}</td>
+                    <td>{{ k.created }}</td>
+                    <td class="font-monospace">{{ formatFingerprint(k.encKeyId) || '—' }}</td>
+                </tr>
+            </tbody>
+        </table>
+
+        </template>
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+    </div>
+</div>
+</div>
+</div>
+</Teleport>
 
 </div>`
 };
@@ -986,6 +1357,8 @@ const EncryptForm = {
                     const wrappedKeyBuffer = await rsaoaep.encrypt(recipientPubKey, rawAesKeyBuffer);
                     encryptedKeys.push({
                         recipientName: contact.name,
+                        // Fingerprint of the recipient's public key, lets the recipient see which key was expected
+                        keyId: await SBO_CryptoUtils.jwkThumbprint(encKeyJwk),
                         encryptedKey: b64.encodeBytes(new Uint8Array(wrappedKeyBuffer))
                     });
                 }
@@ -1086,7 +1459,7 @@ const EncryptForm = {
 </div>
 
 <div class="my-2">
-    <label class="form-label fw-medium">Recipients</label>
+    <label class="form-label fw-bold">Recipients</label>
     <div v-if="contactsWithKeys.length === 0" class="text-secondary small">
         No contacts with keys. Add contacts with public keys in the Contacts tab.
     </div>
@@ -1106,7 +1479,7 @@ const EncryptForm = {
         No keys loaded — package will not be signed. Load your keys in the Keys tab.
     </div>
     <div v-else class="text-secondary small">
-        Signed with: {{ myKeys[0].downloadable.name }}
+        Encrypted package will be signed with: {{ myKeys[0].downloadable.name }}
     </div>
 </div>
 
@@ -1139,10 +1512,33 @@ const ContactForm = {
     data() {
         return {
             contactInfo: {...this.contact},
+            // New contacts start with file loading; existing ones show their pasted keys
+            keyInputMode: (this.contact && this.contact.jwks) ? 'paste' : 'file',
+            loadedFileName: null,
+            loadedJwks: null,       // the keys as loaded from loadedFileName, to detect later edits
             loadError: null
         };
     },
+    computed: {
+        /**
+         * Name of the file the current keys came from, or null if no file was loaded
+         * or the keys were edited afterwards.
+         */
+        keysLoadedFrom() {
+            if (this.loadedFileName && this.contactInfo.jwks && this.contactInfo.jwks === this.loadedJwks) {
+                return this.loadedFileName;
+            }
+            return null;
+        }
+    },
     methods: {
+        /**
+         * Remembers which file the current keys were loaded from.
+         */
+        markKeysLoaded(fileName) {
+            this.loadedFileName = fileName;
+            this.loadedJwks = this.contactInfo.jwks;
+        },
         printCreated() {
             if(this.contact){
                 return SBO_FormatTimestampSeconds(this.contactInfo.created);
@@ -1163,6 +1559,8 @@ const ContactForm = {
          */
         loadKeyFileSelected(event){
             this.loadError = null;
+            this.loadedFileName = null;
+            this.loadedJwks = null;
             const file = event.target.files[0];
             if (!file) return;
             const reader = new FileReader();
@@ -1172,9 +1570,16 @@ const ContactForm = {
                     if (Array.isArray(parsed.keys)) {
                         // It's a public.jwks.json — populate the keys field only
                         this.contactInfo.jwks = e.target.result;
+                        this.markKeysLoaded(file.name);
                     } else if (parsed.name !== undefined || parsed.jwks !== undefined) {
                         // It's a saved contact file — populate all fields
                         Object.assign(this.contactInfo, parsed);
+                        if (parsed.jwks) {
+                            this.markKeysLoaded(file.name);
+                        } else {
+                            this.loadError = 'This contact file has no public keys. Name and notes were filled in; ' +
+                                'load or paste the public keys separately.';
+                        }
                     } else {
                         this.loadError = 'Unrecognised file format.';
                     }
@@ -1187,21 +1592,40 @@ const ContactForm = {
         },
     },
     template:`<div>
-<fieldset class="border border-primary-subtle rounded p-2">
-    <legend class="fs-6">Load keys from file</legend>
-    <div class="form-text mb-1">Load a <strong>public.jwks.json</strong> downloaded from SBOsecure, or a previously saved contact file.</div>
-    <input class="form-control" type="file" accept=".json" v-on:change="loadKeyFileSelected">
-    <div v-if="loadError" class="form-text text-danger">{{ loadError }}</div>
-</fieldset>
-
-<fieldset class="mt-2 rounded border border-primary-subtle p-2">
+<fieldset class="rounded border border-primary-subtle p-2">
 <legend class="fs-6">Contact details</legend>
     <div class="mb-2"><label class="form-label mb-0">Name</label><input class="form-control" type="text" v-model="contactInfo.name"></div>
     <div class="mb-2"><label class="form-label mb-0">Notes</label><textarea class="form-control" v-model="contactInfo.notes"></textarea></div>
     <div class="mb-2">
-        <label class="form-label mb-0">Public keys</label>
-        <div class="form-text mb-1">Paste the contents of <strong>public.jwks.json</strong> here, or load it from file above.</div>
-        <textarea class="form-control form-control-sm font-monospace" rows="3" v-model="contactInfo.jwks" placeholder="{&quot;keys&quot;:[...]}"></textarea>
+        <label class="form-label mb-1">Public keys</label>
+        <div class="mb-2">
+            <div class="btn-group" role="group" aria-label="Public key input">
+                <button type="button" class="btn btn-sm"
+                    v-bind:class="keyInputMode==='file' ? 'btn-primary' : 'btn-outline-secondary'"
+                    v-on:click="keyInputMode='file'">Load file</button>
+                <button type="button" class="btn btn-sm"
+                    v-bind:class="keyInputMode==='paste' ? 'btn-primary' : 'btn-outline-secondary'"
+                    v-on:click="keyInputMode='paste'">Paste</button>
+            </div>
+        </div>
+
+        <div v-if="keyInputMode==='file'">
+            <input class="form-control" type="file" accept=".json" v-on:change="loadKeyFileSelected">
+            <div class="form-text">Select the <strong>public.jwks.json</strong> your contact gave you, or a previously saved contact file (this also fills in name and notes).</div>
+            <div v-if="keysLoadedFrom" class="form-text text-success">
+                <i class="bi bi-check-circle-fill me-1"></i>Keys loaded from {{ keysLoadedFrom }}
+            </div>
+            <div v-else-if="contactInfo.jwks" class="form-text text-secondary">
+                <i class="bi bi-key me-1"></i>Keys already set. Loading a file replaces them.
+            </div>
+        </div>
+
+        <div v-if="keyInputMode==='paste'">
+            <textarea class="form-control form-control-sm font-monospace" rows="3" v-model="contactInfo.jwks" placeholder="{&quot;keys&quot;:[...]}"></textarea>
+            <div class="form-text">Paste the contents of <strong>public.jwks.json</strong>.</div>
+        </div>
+
+        <div v-if="loadError" class="form-text text-danger">{{ loadError }}</div>
     </div>
     <div class="mb-2 text-center">
         <button type="button" v-on:click="cancelEdit" class="btn btn-sm btn-secondary me-2">Cancel</button>

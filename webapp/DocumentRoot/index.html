@@ -67,10 +67,17 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
     <!-- ── Header ───────────────────────────────────────────── -->
     <header class="sbo-topbar">
         <span class="sbo-brand" id="pageTopHeader">SBO<strong>secure</strong></span>
-        <div class="sbo-key-pill" v-bind:class="{'has-key': myKeys.length > 0}">
-            <i class="bi" v-bind:class="myKeys.length > 0 ? 'bi-key-fill' : 'bi-key'"></i>
-            <span v-if="myKeys.length > 0">{{ myKeys[0].downloadable.name }}</span>
-            <span v-else>No key loaded</span>
+        <div class="d-flex align-items-center gap-2" style="min-width:0">
+            <div class="sbo-key-pill" v-bind:class="{'has-key': myKeys.length > 0}">
+                <i class="bi" v-bind:class="myKeys.length > 0 ? 'bi-key-fill' : 'bi-key'"></i>
+                <span v-if="myKeys.length > 0">{{ myKeys[0].downloadable.name }}</span>
+                <span v-else>No key loaded</span>
+            </div>
+            <button type="button" class="sbo-help-btn" title="Documentation"
+                aria-label="Documentation" aria-controls="sboDocsPanel"
+                v-on:click="showDocs()">
+                <i class="bi bi-question-circle"></i>
+            </button>
         </div>
     </header>
 
@@ -261,6 +268,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 <div class="sbo-card-body">
                     <sbo-decrypt-form
                         v-bind:my-keys="myKeys"
+                        v-bind:my-contacts="myContacts"
                         v-on:encrypt-with-text="handleEncryptWithText">
                     </sbo-decrypt-form>
                 </div>
@@ -384,6 +392,151 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
         <a href="https://www.sbosoft.net" target="_blank">SBOSOFT</a>
     </footer>
 
+    <!-- ── Documentation side panel ─────────────────────────── -->
+    <div class="offcanvas offcanvas-end sbo-docs" id="sboDocsPanel" ref="docsPanel"
+         tabindex="-1" data-bs-backdrop="false" data-bs-scroll="true"
+         aria-labelledby="sboDocsTitle">
+        <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="sboDocsTitle">
+                <i class="bi bi-question-circle me-1"></i> How to use SBOsecure
+            </h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+        </div>
+        <div class="offcanvas-body" ref="docsBody">
+
+            <section id="doc-overview" class="sbo-doc-section">
+                <h6>What is SBOsecure?</h6>
+                <p>
+                    A simple tool for sending private messages and files. Only the people you choose
+                    can open them, and they can check that the file really came from you.
+                    Everything runs in your browser: nothing is uploaded, and there is no account.
+                </p>
+                <p>You have a pair of keys:</p>
+                <ul>
+                    <li><strong>Public key</strong>: give it to anyone who wants to send you something.</li>
+                    <li><strong>Private key</strong> (inside your keyset file, protected by your password):
+                        keep it to yourself. It opens what others send you.</li>
+                </ul>
+                <p class="mb-1"><strong>Typical workflow</strong></p>
+                <ol>
+                    <li>Create your keys once and save the keyset file.</li>
+                    <li>Swap public keys with the people you talk to and add them as contacts.</li>
+                    <li>Encrypt for a contact, then send them the <code>.sbo.json</code> file any way you like.</li>
+                    <li>They decrypt it with their own keys.</li>
+                </ol>
+            </section>
+
+            <section id="doc-keys" class="sbo-doc-section"
+                v-bind:class="{current: docSectionForTab() === 'doc-keys'}">
+                <h5><i class="bi bi-key me-1"></i> My Keys</h5>
+                <p>
+                    <h6>Create new key:</h6> enter a name, a password and an iterations number
+                    (600,000–1,000,000). Then <strong>download the keyset file straight away</strong>.
+                    Keys are lost when the page is closed.
+                </p>
+                <p>
+                    <h6>Load key:</h6> at the start of each session, pick your keyset file and enter
+                    the same password and number (the "secret number").
+                </p>
+                <p>
+                    <strong>Public key</strong> downloads <code>public.jwks.json</code>. Share that file with contacts.
+                    Never share the <strong>Keyset</strong> file.
+                </p>
+                <div class="sbo-doc-warn">
+                    If you forget the password or the number, the key cannot be recovered.
+                </div>
+            </section>
+
+            <section id="doc-contacts" class="sbo-doc-section"
+                v-bind:class="{current: docSectionForTab() === 'doc-contacts'}">
+                <h5><i class="bi bi-people-fill me-1"></i> Contacts</h5>
+                <p>
+                    A contact is a name plus that person's public key. Click <strong>Add</strong> and load
+                    their <code>public.jwks.json</code>, or paste its contents.
+                </p>
+                <p>
+                    Contacts are only kept while the page is open. Use <strong>Download all</strong> to save
+                    them, and <strong>Import</strong> to load them next time.
+                </p>
+                <p>
+                    Get public keys from a channel you trust. If an attacker swaps the key,
+                    they can read what you send.
+                </p>
+            </section>
+
+            <section id="doc-encrypt" class="sbo-doc-section"
+                v-bind:class="{current: docSectionForTab() === 'doc-encrypt'}">
+                <h5><i class="bi bi-lock-fill me-1"></i> Encrypt</h5>
+                <ol>
+                    <li>Type a message or choose a file.</li>
+                    <li>Tick one or more recipients from your contacts.</li>
+                    <li>Click <strong>Encrypt</strong>, then download or share the <code>.sbo.json</code> file.</li>
+                </ol>
+                <p>
+                    If your keys are loaded, the package is signed. Recipients who have you as a contact
+                    will see that it was signed by you.
+                </p>
+                <div class="sbo-doc-warn">
+                    You can't open a package you encrypted for someone else unless you also add
+                    yourself as a recipient.
+                </div>
+            </section>
+
+            <section id="doc-decrypt" class="sbo-doc-section"
+                v-bind:class="{current: docSectionForTab() === 'doc-decrypt'}">
+                <h5><i class="bi bi-unlock-fill me-1"></i> Decrypt</h5>
+                <ol>
+                    <li>Load your keys in My Keys first.</li>
+                    <li>Paste the package content or load the <code>.sbo.json</code> file.</li>
+                    <li>Click <strong>Decrypt</strong>. Text is shown on screen; files can be saved.</li>
+                </ol>
+                <p class="mb-1">The signature badge tells you about the sender:</p>
+                <ul>
+                    <li><strong>Valid, signed by contact</strong>: it came from that contact and
+                        hasn't been changed.</li>
+                    <li><strong>Valid, signer not in your contacts</strong>: anyone can sign a package,
+                        so you can't tell who sent it. Add the sender as a contact using their public
+                        key to confirm it.</li>
+                    <li><strong>Invalid</strong>: the package was modified. Don't trust it.</li>
+                    <li><strong>No signature</strong>: you can't tell who sent it.</li>
+                </ul>
+                <p>
+                    If decryption fails, click <strong>Show document details</strong>. It compares the key
+                    fingerprints the package expects with your loaded keys and suggests what went wrong.
+                </p>
+            </section>
+
+            <section id="doc-pbkdf" class="sbo-doc-section"
+                v-bind:class="{current: docSectionForTab() === 'doc-pbkdf'}">
+                <h5><i class="bi bi-asterisk me-1"></i> Password Enc.</h5>
+                <p>
+                    Encrypts text with just a password, so no keys or contacts are needed.
+                    The recipient needs the package file, the password <em>and</em> the iterations number.
+                    Tell them the password some other way than the file, e.g. by phone.
+                </p>
+            </section>
+
+            <section id="doc-base64" class="sbo-doc-section"
+                v-bind:class="{current: docSectionForTab() === 'doc-base64'}">
+                <h5><i class="bi bi-code-slash me-1"></i> Base64</h5>
+                <p>
+                    Converts text to and from Base64. This is <strong>not encryption</strong>: anyone can
+                    decode it. Use it to move data through channels that only accept plain text.
+                </p>
+            </section>
+
+            <section id="doc-notes" class="sbo-doc-section">
+                <h5><i class="bi bi-info-circle me-1"></i> Good to know</h5>
+                <ul>
+                    <li>Refreshing or closing the page clears loaded keys and contacts. Save your files.</li>
+                    <li>Keep your keyset file as safe as a password-manager file.</li>
+                    <li>Uses your browser's built-in Web Crypto: AES-256-GCM, RSA-OAEP, RSASSA-PKCS1-v1_5 and PBKDF2-SHA-256.</li>
+                </ul>
+            </section>
+
+        </div>
+    </div>
+
 </div><!-- /app -->
 
 <script>
@@ -396,13 +549,73 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 showingContactForm: false,
                 currentEditedContact: {},
                 currentEditedContactIndex: -1,
-                encryptPreload: null
+                encryptPreload: null,
+                docsOpen: false
             };
+        },
+        watch: {
+            // Keep the open documentation panel in sync with the tab being shown
+            activeTab() {
+                if (this.docsOpen) {
+                    this.scrollDocsToCurrentTab(true);
+                }
+            }
+        },
+        mounted() {
+            const panel = this.$refs.docsPanel;
+            panel.addEventListener('show.bs.offcanvas', () => { this.docsOpen = true; });
+            panel.addEventListener('shown.bs.offcanvas', () => {
+                // The panel is non-modal (page stays usable), but Bootstrap marks it aria-modal
+                panel.removeAttribute('aria-modal');
+                // Without a backdrop Bootstrap does not move focus; do it so Esc and screen readers work
+                panel.focus({ preventScroll: true });
+            });
+            panel.addEventListener('hidden.bs.offcanvas', () => { this.docsOpen = false; });
+            document.addEventListener('keydown', this.closeDocsOnEscape);
+        },
+        beforeUnmount() {
+            document.removeEventListener('keydown', this.closeDocsOnEscape);
         },
         methods: {
             switchActiveTab(tab) {
                 this.activeTab = tab;
                 this.scrollToTop();
+            },
+            /**
+             * Returns the id of the documentation section describing the current tab.
+             */
+            docSectionForTab() {
+                if (this.activeTab.startsWith('keys')) return 'doc-keys';
+                return 'doc-' + this.activeTab;
+            },
+            /**
+             * Scrolls the documentation panel so the section for the current tab is at the top.
+             */
+            scrollDocsToCurrentTab(smooth) {
+                const body = this.$refs.docsBody;
+                const section = document.getElementById(this.docSectionForTab());
+                if (!body || !section) return;
+                body.scrollTo({
+                    top: section.offsetTop - body.offsetTop,
+                    behavior: smooth ? 'smooth' : 'auto'
+                });
+            },
+            /**
+             * Opens the documentation side panel at the section for the current tab.
+             */
+            /**
+             * Closes the documentation panel on Esc even when focus is back in the page,
+             * unless a modal is open (Esc then belongs to the modal).
+             */
+            closeDocsOnEscape(event) {
+                if (event.key !== 'Escape' || !this.docsOpen) return;
+                if (document.querySelector('.modal.show')) return;
+                bootstrap.Offcanvas.getOrCreateInstance(this.$refs.docsPanel).hide();
+            },
+            showDocs() {
+                bootstrap.Offcanvas.getOrCreateInstance(this.$refs.docsPanel).toggle();
+                // The panel is laid out (only hidden) before the slide-in, so scrolling now works
+                this.$nextTick(() => this.scrollDocsToCurrentTab(false));
             },
             handleEncryptWithText(text) {
                 this.encryptPreload = { text };
