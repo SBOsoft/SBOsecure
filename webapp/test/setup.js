@@ -29,11 +29,20 @@ export function getClasses() {
         crypto: webcrypto,
         TextEncoder,
         TextDecoder,
+        setTimeout,
+        clearTimeout,
         console
     }
     const ctx = vm.createContext(sandbox)
 
-    for (const file of ['crypto.js', 'crypto-utils.js']) {
+    const files = [
+        'crypto.js',
+        'crypto-utils.js',
+        'vendor/qrcodegen/qrcodegen.js',
+        'vendor/jsqr/jsQR.js',
+        'qr-utils.js'
+    ]
+    for (const file of files) {
         vm.runInContext(readFileSync(join(docRoot, file), 'utf-8'), ctx)
     }
 

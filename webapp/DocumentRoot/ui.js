@@ -18,7 +18,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
 const DownloadableItem = {
-    props: ['fileName', 'mimeType', 'itemData', 'dataType'],
+    // allowQr: also offer a "QR code" button. Never set it for private data such as keysets.
+    props: ['fileName', 'mimeType', 'itemData', 'dataType', 'allowQr'],
     methods:{
         download() {
             SBO_SaveAsFile(this.itemData, this.fileName, this.mimeType || 'application/octet-stream');
@@ -36,8 +37,470 @@ const DownloadableItem = {
         <img src="img/download.svg" border="0">
         Download
     </button>
-    
-</div>`   
+    <sbo-qr-button v-if="allowQr" v-bind:item-data="itemData" v-bind:title="fileName"></sbo-qr-button>
+</div>`
+};
+
+
+let SBO_QrButtonCounter = 0;
+
+/**
+ * Button that shows data as one or more QR codes in a modal.
+ * Data above SBO_QR.MAX_DISPLAY_BYTES is not encoded; the modal says why.
+ * Only use it for data that is safe to show on screen (public keys, encrypted packages).
+ */
+const QrDisplayButton = {
+    // label: button text; pass "" for an icon-only button. btnClass: classes of the button.
+    props: ['itemData', 'title', 'btnClass', 'label'],
+    data() {
+        return {
+            uid: 'sboQr' + (++SBO_QrButtonCounter),
+            open: false,
+            codes: [],          // [{ qr, url }] one entry per part
+            error: null,
+            view: 'grid',       // 'grid' | 'single'
+            current: 0,
+            playTimer: null
+        };
+    },
+    computed: {
+        sizeKb() {
+            return (SBO_QR.encodedLength(this.itemData || '') / 1024).toFixed(1);
+        },
+        buttonLabel() {
+            return this.label !== undefined ? this.label : 'QR code';
+        }
+    },
+    beforeUnmount() {
+        this.stopPlaying();
+        if (this.$refs.modal) {
+            const modal = bootstrap.Modal.getInstance(this.$refs.modal);
+            if (modal) modal.dispose();
+        }
+    },
+    methods: {
+        /**
+         * Opens the modal and generates the codes.
+         */
+        async show() {
+            this.stopPlaying();
+            this.error = null;
+            this.codes = [];
+            this.view = 'grid';
+            this.current = 0;
+            this.open = true;
+            await this.$nextTick();
+            const el = this.$refs.modal;
+            el.addEventListener('hidden.bs.modal', this.onHidden, { once: true });
+            bootstrap.Modal.getOrCreateInstance(el).show();
+
+            try {
+                if (!this.itemData) throw new Error('There is nothing to show.');
+                if (!SBO_QR.canDisplay(this.itemData)) {
+                    throw new Error(`This data is ${this.sizeKb} KB. QR codes are only offered up to ` +
+                        `${SBO_QR.MAX_DISPLAY_BYTES / 1024} KB; use Download instead.`);
+                }
+                const parts = await SBO_QR.split(this.itemData);
+                const codes = [];
+                for (const part of parts) {
+                    const qr = Vue.markRaw(SBO_QR.encode(part));   // large immutable object, keep it out of reactivity
+                    codes.push({ qr: qr, url: SBO_QR.toSvgDataUrl(qr) });
+                }
+                this.codes = codes;
+            } catch (err) {
+                console.error('QR generation failed:', err);
+                this.error = err.message || 'Could not create QR codes.';
+            }
+        },
+        onHidden() {
+            this.stopPlaying();
+            const modal = bootstrap.Modal.getInstance(this.$refs.modal);
+            if (modal) modal.dispose();
+            this.open = false;
+            this.codes = [];
+        },
+        showSingle(index) {
+            this.view = 'single';
+            this.current = index;
+        },
+        next() {
+            this.current = (this.current + 1) % this.codes.length;
+        },
+        previous() {
+            this.current = (this.current + this.codes.length - 1) % this.codes.length;
+        },
+        /**
+         * Cycles through the codes so another device can scan them one after the other.
+         */
+        togglePlaying() {
+            if (this.playTimer) {
+                this.stopPlaying();
+            } else {
+                this.playTimer = setInterval(() => this.next(), 1500);
+            }
+        },
+        stopPlaying() {
+            if (this.playTimer) {
+                clearInterval(this.playTimer);
+                this.playTimer = null;
+            }
+        },
+        /**
+         * Saves one code as a PNG file.
+         */
+        async saveImage(index) {
+            const blob = await SBO_QR.toPngBlob(this.codes[index].qr);
+            const base = (this.title || 'sbosecure').replace(/[^\w.-]+/g, '_');
+            SBO_SaveAsFile(blob, `${base}-qr-${index + 1}-of-${this.codes.length}.png`, 'image/png');
+        }
+    },
+    template: `<span>
+<button type="button" v-bind:class="btnClass || 'btn btn-sm btn-outline-light'" v-on:click="show"
+    title="Show as QR code" aria-label="Show as QR code">
+    <i class="bi bi-qr-code"></i><span v-if="buttonLabel"> {{ buttonLabel }}</span>
+</button>
+
+<Teleport to="body">
+<div v-if="open" class="modal fade" ref="modal" tabindex="-1" v-bind:aria-labelledby="uid + 'Title'" aria-hidden="true">
+<div class="modal-dialog modal-lg modal-dialog-scrollable">
+<div class="modal-content">
+    <div class="modal-header">
+        <h5 class="modal-title" v-bind:id="uid + 'Title'">
+            <i class="bi bi-qr-code me-1"></i>{{ title || 'QR code' }}
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    </div>
+    <div class="modal-body">
+        <div v-if="error" class="alert alert-warning mb-0">{{ error }}</div>
+        <div v-else-if="codes.length === 0" class="text-secondary">Creating QR codes…</div>
+        <template v-else>
+            <div class="small text-secondary mb-2">
+                <span v-if="codes.length === 1">Scan this code with SBOsecure on the other device.</span>
+                <span v-else>{{ codes.length }} codes. Scan all of them with SBOsecure on the other device, in any order.</span>
+                Anyone who can see or photograph these codes gets a copy of this data.
+            </div>
+
+            <div v-if="codes.length > 1" class="btn-group mb-3" role="group" aria-label="QR view">
+                <button type="button" class="btn btn-sm"
+                    v-bind:class="view==='grid' ? 'btn-primary' : 'btn-outline-secondary'"
+                    v-on:click="view='grid'; stopPlaying()">All codes</button>
+                <button type="button" class="btn btn-sm"
+                    v-bind:class="view==='single' ? 'btn-primary' : 'btn-outline-secondary'"
+                    v-on:click="view='single'">One at a time</button>
+            </div>
+
+            <div v-if="view==='grid'" class="row g-3">
+                <div v-for="(code, i) in codes" v-bind:key="i"
+                     v-bind:class="codes.length === 1 ? 'col-12' : 'col-sm-6'" class="text-center">
+                    <img v-bind:src="code.url" class="sbo-qr-img" v-bind:class="{'sbo-qr-img-lg': codes.length === 1}"
+                         v-bind:alt="'QR code ' + (i + 1) + ' of ' + codes.length"
+                         style="cursor:zoom-in" v-on:click="showSingle(i)">
+                    <div class="small mt-1">
+                        <span v-if="codes.length > 1" class="me-2">{{ i + 1 }} of {{ codes.length }}</span>
+                        <a href="#" v-on:click.prevent="saveImage(i)"><i class="bi bi-download me-1"></i>Save image</a>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="view==='single'" class="text-center">
+                <img v-bind:src="codes[current].url" class="sbo-qr-img sbo-qr-img-lg"
+                     v-bind:alt="'QR code ' + (current + 1) + ' of ' + codes.length">
+                <div class="d-flex justify-content-center align-items-center gap-2 mt-2">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" v-on:click="stopPlaying(); previous()"
+                        aria-label="Previous code"><i class="bi bi-chevron-left"></i></button>
+                    <span class="small">{{ current + 1 }} of {{ codes.length }}</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" v-on:click="stopPlaying(); next()"
+                        aria-label="Next code"><i class="bi bi-chevron-right"></i></button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" v-on:click="togglePlaying">
+                        <i class="bi" v-bind:class="playTimer ? 'bi-pause-fill' : 'bi-play-fill'"></i>
+                        {{ playTimer ? 'Pause' : 'Play' }}
+                    </button>
+                    <a href="#" class="small ms-2" v-on:click.prevent="saveImage(current)">Save image</a>
+                </div>
+            </div>
+        </template>
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+    </div>
+</div>
+</div>
+</div>
+</Teleport>
+</span>`
+};
+
+
+/**
+ * Reads data from one or more QR codes, live from the camera or from image files.
+ * Emits 'scanned' with the reassembled text once every part of a set has been read.
+ * Everything happens in the browser; the camera is turned off as soon as it is not needed.
+ */
+const QrScanner = {
+    props: ['hint'],
+    emits: ['scanned'],
+    data() {
+        return {
+            hasCamera: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+            cameraOn: false,
+            cameraStarting: false,
+            mirrored: false,        // preview of a user-facing camera is mirrored, like a mirror
+            readingImages: false,
+            received: 0,
+            total: 0,
+            error: null,
+            notice: null,           // informational message, e.g. why the camera stopped
+            done: false
+        };
+    },
+    created() {
+        // Deliberately not reactive: a MediaStream, a timer and the parts collected so far
+        this.assembler = new SBO_QRAssembler();
+        this.stream = null;
+        this.scanTimer = null;
+        // Camera session number. Every start and stop increments it, so a scan loop or a late
+        // getUserMedia result from an older session can tell it is stale and stop itself.
+        this.session = 0;
+    },
+    mounted() {
+        document.addEventListener('visibilitychange', this.onVisibilityChange);
+        SBO_QR.retainWorker();
+    },
+    beforeUnmount() {
+        document.removeEventListener('visibilitychange', this.onVisibilityChange);
+        this.stopCamera();
+        SBO_QR.releaseWorker();
+    },
+    methods: {
+        /**
+         * Asks for camera access and starts scanning frames.
+         */
+        async startCamera() {
+            this.stopCamera();
+            const session = ++this.session;
+            this.error = null;
+            this.notice = null;
+            this.done = false;
+            this.cameraStarting = true;
+            try {
+                // Ask for a high resolution: browsers often default to 640x480, which leaves too few
+                // pixels per module for dense codes. "ideal" falls back gracefully on lesser cameras.
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: { ideal: 'environment' },
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    },
+                    audio: false
+                });
+                // Stopped, restarted, closed or hidden while the permission prompt was open
+                if (session !== this.session || document.hidden || !this.$refs.video || !this.isVisible()) {
+                    for (const track of stream.getTracks()) track.stop();
+                    return;
+                }
+                this.stream = stream;
+                const settings = stream.getVideoTracks()[0].getSettings();
+                // Laptop webcams often report no facingMode; anything not facing away is treated as a selfie camera
+                this.mirrored = settings.facingMode !== 'environment';
+                const video = this.$refs.video;
+                video.srcObject = stream;
+                await video.play();
+                if (session !== this.session) return;
+                this.cameraOn = true;
+                this.scheduleScan(session);
+            } catch (err) {
+                if (session !== this.session) return;
+                this.stopCamera();
+                if (err && err.name === 'NotAllowedError') {
+                    this.error = 'Camera access was denied. Allow it in your browser settings, or choose images instead.';
+                } else if (err && err.name === 'NotFoundError') {
+                    this.error = 'No camera was found. Choose images instead.';
+                } else {
+                    this.error = 'Could not start the camera.';
+                }
+            } finally {
+                if (session === this.session) this.cameraStarting = false;
+            }
+        },
+        stopCamera() {
+            this.session++;
+            this.cameraStarting = false;
+            if (this.scanTimer) {
+                clearTimeout(this.scanTimer);
+                this.scanTimer = null;
+            }
+            if (this.stream) {
+                for (const track of this.stream.getTracks()) track.stop();
+                this.stream = null;
+            }
+            if (this.$refs.video) this.$refs.video.srcObject = null;
+            this.cameraOn = false;
+        },
+        onVisibilityChange() {
+            // Never leave the camera running in a background tab
+            if (document.hidden && this.cameraOn) {
+                this.stopCamera();
+                this.notice = 'The camera was turned off because the page was hidden.';
+            }
+        },
+        /**
+         * True while the scanner is on screen. App tabs are hidden with v-show, which keeps the
+         * component mounted; an element inside a display:none ancestor has no offsetParent.
+         */
+        isVisible() {
+            return !!this.$el && this.$el.offsetParent !== null;
+        },
+        scheduleScan(session) {
+            this.scanTimer = setTimeout(() => this.scanFrame(session), 200);
+        },
+        /**
+         * Looks for codes in the current video frame, then schedules the next look.
+         * Stops quietly if the camera session it belongs to has ended.
+         */
+        async scanFrame(session) {
+            this.scanTimer = null;
+            const video = this.$refs.video;
+            if (session !== this.session || !this.cameraOn || !video) return;
+            if (!this.isVisible()) {
+                // The user switched to another app tab: never scan where nobody can see it
+                this.stopCamera();
+                this.notice = 'The camera was turned off because you left this screen.';
+                return;
+            }
+            if (video.readyState >= 2 && video.videoWidth > 0) {
+                try {
+                    // Read frames at full resolution (up to 1080p): shrinking them loses the detail
+                    // dense codes need. Scans are scheduled after each read, so slow reads self-throttle.
+                    const texts = await SBO_QR.decodeSource(video, video.videoWidth, video.videoHeight,
+                        { maxSize: 1920, thorough: false });
+                    if (session !== this.session) return;
+                    for (const text of texts) {
+                        if (await this.accept(text)) return;
+                    }
+                } catch (err) {
+                    if (session !== this.session) return;
+                    this.error = err.message || 'Could not read from the camera.';
+                }
+            }
+            if (session === this.session && this.cameraOn) this.scheduleScan(session);
+        },
+        /**
+         * Reads codes from the chosen image files.
+         */
+        async onImagesSelected(event) {
+            const files = event.target.files;
+            this.error = null;
+            this.done = false;
+            this.readingImages = true;
+            try {
+                for (const file of files) {
+                    let texts;
+                    try {
+                        const bitmap = await SBO_QR.loadImageBitmap(file, 2000);
+                        try {
+                            texts = await SBO_QR.decodeSource(bitmap, bitmap.width, bitmap.height,
+                                { maxSize: 2000, thorough: true });
+                        } finally {
+                            bitmap.close();
+                        }
+                    } catch (err) {
+                        this.error = (err && /too large/.test(err.message))
+                            ? err.message
+                            : `Could not read ${file.name} as an image.`;
+                        continue;
+                    }
+                    if (texts.length === 0) {
+                        this.error = `No QR code found in ${file.name}.`;
+                        continue;
+                    }
+                    for (const text of texts) {
+                        if (await this.accept(text)) return;
+                    }
+                }
+            } finally {
+                this.readingImages = false;
+                event.target.value = '';
+            }
+        },
+        /**
+         * Adds one scanned code. Returns true once the set is complete and has been emitted.
+         */
+        async accept(text) {
+            let status;
+            try {
+                status = this.assembler.add(text);
+            } catch (err) {
+                this.error = err.message;
+                return false;
+            }
+            this.received = this.assembler.received;
+            this.total = this.assembler.total || 1;
+            if (status !== 'complete') {
+                if (status === 'added') this.error = null;
+                return false;
+            }
+
+            let result;
+            try {
+                result = await this.assembler.result();
+            } catch (err) {
+                // Parts did not fit together: discard them and keep scanning
+                this.error = err.message;
+                this.resetParts();
+                return false;
+            }
+            this.resetParts();
+            this.stopCamera();
+            this.done = true;
+            this.error = null;
+            this.$emit('scanned', result);
+            return true;
+        },
+        resetParts() {
+            this.assembler.reset();
+            this.received = 0;
+            this.total = 0;
+        },
+        startOver() {
+            this.resetParts();
+            this.error = null;
+            this.done = false;
+        }
+    },
+    template: `<div class="sbo-qr-scanner">
+    <div class="d-flex gap-2 flex-wrap align-items-center mb-2">
+        <button v-if="hasCamera && !cameraOn" type="button" class="btn btn-sm btn-primary"
+            v-on:click="startCamera" v-bind:disabled="cameraStarting">
+            <i class="bi bi-camera me-1"></i>{{ cameraStarting ? 'Starting camera…' : 'Use camera' }}
+        </button>
+        <button v-if="cameraOn" type="button" class="btn btn-sm btn-outline-secondary" v-on:click="stopCamera">
+            <i class="bi bi-camera-video-off me-1"></i>Stop camera
+        </button>
+        <label class="btn btn-sm btn-secondary mb-0">
+            <i class="bi bi-image me-1"></i>Choose image(s)…
+            <input type="file" accept="image/*" multiple class="d-none" v-on:change="onImagesSelected">
+        </label>
+        <button v-if="received > 0" type="button" class="btn btn-sm btn-link" v-on:click="startOver">Start over</button>
+    </div>
+
+    <video ref="video" v-show="cameraOn" class="sbo-qr-video" v-bind:class="{'sbo-qr-video-mirrored': mirrored}"
+        playsinline muted></video>
+
+    <div v-if="total > 1" class="form-text fw-medium">
+        <i class="bi bi-hourglass-split me-1"></i>Read {{ received }} of {{ total }} codes. Scan the rest in any order.
+    </div>
+    <div v-if="readingImages" class="form-text">Reading images…</div>
+    <div v-if="done" class="form-text text-success"><i class="bi bi-check-circle-fill me-1"></i>QR code read.</div>
+    <div v-if="error" class="form-text text-danger">{{ error }}</div>
+    <div v-if="notice && !cameraOn" class="form-text text-secondary">
+        <i class="bi bi-info-circle me-1"></i>{{ notice }}
+    </div>
+    <div class="form-text">
+        <span v-if="hint">{{ hint }} </span>
+        Images and camera frames are processed on this device only. If an image holds several codes and
+        only one is found, use one image per code.
+    </div>
+</div>`
 };
 
 
@@ -56,7 +519,8 @@ const PBKDFEncryptDecrypt = {
             pbkdfDecryptFailed: false,
             pbkdfPackage: null,
             pbkdfLoadError: null,
-            pbkdfError: null
+            pbkdfError: null,
+            pbkdfScanning: false    // QR scanner shown on the decrypt screen
         };
     },
     methods:{
@@ -65,6 +529,7 @@ const PBKDFEncryptDecrypt = {
         },
         goBack(){
             this.pbkdfMode = null;
+            this.pbkdfScanning = false;
             this.pbkdfPassword = '';
             this.pbkdfPasswordVisible = false;
             this.pbkdfPlainText = '';
@@ -154,24 +619,39 @@ const PBKDFEncryptDecrypt = {
             if (!file) return;
             const reader = new FileReader();
             reader.onload = (e) => {
-                try {
-                    const pkg = JSON.parse(e.target.result);
-                    if (pkg.type !== 'sbo-pbkdf-encrypted') {
-                        this.pbkdfLoadError = 'Not a password-encrypted package. Use the Decrypt tab for public-key packages.';
-                        return;
-                    }
-                    this.pbkdfCipherText = pkg.encryptedContent.ciphertext;
-                    this.pbkdfIV        = pkg.encryptedContent.iv;
-                    this.pbkdfSalt      = pkg.pbkdf.salt;
-                    this.pbkdfPackage   = null;
-                    this.pbkdfPlainText = '';
-                    this.pbkdfDecryptFailed = false;
-                } catch {
-                    this.pbkdfLoadError = 'Could not parse file.';
-                }
+                this.applyPbkdfPackageText(e.target.result);
                 event.target.value = '';
             };
             reader.readAsText(file);
+        },
+        /**
+         * Loads a password-encrypted package from its JSON text (file or QR code).
+         * Returns true on success; otherwise sets pbkdfLoadError.
+         */
+        applyPbkdfPackageText(text){
+            this.pbkdfLoadError = null;
+            try {
+                const pkg = JSON.parse(text);
+                if (pkg.type !== 'sbo-pbkdf-encrypted') {
+                    this.pbkdfLoadError = 'Not a password-encrypted package. Use the Decrypt tab for public-key packages.';
+                    return false;
+                }
+                this.pbkdfCipherText = pkg.encryptedContent.ciphertext;
+                this.pbkdfIV        = pkg.encryptedContent.iv;
+                this.pbkdfSalt      = pkg.pbkdf.salt;
+                this.pbkdfPackage   = null;
+                this.pbkdfPlainText = '';
+                this.pbkdfDecryptFailed = false;
+                return true;
+            } catch {
+                this.pbkdfLoadError = 'Could not read the package.';
+                return false;
+            }
+        },
+        onPbkdfPackageScanned(text){
+            if (this.applyPbkdfPackageText(text)) {
+                this.pbkdfScanning = false;
+            }
         }
     },
     template: `<div>
@@ -234,6 +714,8 @@ const PBKDFEncryptDecrypt = {
         <button type="button" v-on:click="downloadPbkdfPackage" class="btn btn-success btn-sm">
             <i class="bi bi-download me-1"></i>Download package
         </button>
+        <sbo-qr-button v-bind:item-data="pbkdfPackage" title="Password-encrypted message"
+            btn-class="btn btn-outline-success btn-sm"></sbo-qr-button>
     </div>
 </div>
 
@@ -244,10 +726,21 @@ const PBKDFEncryptDecrypt = {
     </a>
     <div class="mb-3">
         <label class="form-label">Encrypted package file</label>
-        <label class="btn btn-secondary d-block text-start" style="cursor:pointer">
-            <i class="bi bi-folder2-open me-2"></i>Load encrypted package…
-            <input type="file" accept=".json" class="d-none" v-on:change="loadPbkdfPackageFile">
-        </label>
+        <div class="d-flex gap-2 flex-wrap">
+            <label class="btn btn-secondary flex-fill text-start mb-0" style="cursor:pointer">
+                <i class="bi bi-folder2-open me-2"></i>Load encrypted package…
+                <input type="file" accept=".json" class="d-none" v-on:change="loadPbkdfPackageFile">
+            </label>
+            <button type="button" class="btn"
+                v-bind:class="pbkdfScanning ? 'btn-primary' : 'btn-outline-secondary'"
+                v-on:click="pbkdfScanning = !pbkdfScanning">
+                <i class="bi bi-qr-code-scan me-1"></i>Scan QR code
+            </button>
+        </div>
+        <div v-if="pbkdfScanning" class="border rounded p-2 mt-2">
+            <sbo-qr-scanner hint="Scan the QR code(s) of the password-encrypted message."
+                v-on:scanned="onPbkdfPackageScanned"></sbo-qr-scanner>
+        </div>
         <div v-if="pbkdfLoadError" class="form-text text-danger mt-1">{{ pbkdfLoadError }}</div>
     </div>
     <div v-if="pbkdfCipherText" class="alert alert-info d-flex align-items-center gap-2 py-2 mb-3">
@@ -555,6 +1048,23 @@ const CreateNewKeysForm = {
     
 };
 
+/**
+ * Returns a clean copy of a contact with only the known fields, or null if it is not a usable contact.
+ * Contact data can come from files or QR codes made by anyone, so nothing else is copied and every
+ * field must have the expected type.
+ */
+function SBO_SanitizeContact(c) {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const contact = {};
+    if (typeof c.name === 'string') contact.name = c.name;
+    if (typeof c.notes === 'string') contact.notes = c.notes;
+    if (typeof c.jwks === 'string' && c.jwks) contact.jwks = c.jwks;
+    if (typeof c.verifier === 'string') contact.verifier = c.verifier;
+    if (Number.isFinite(c.created)) contact.created = c.created;
+    if (!contact.name && !contact.jwks) return null;
+    return contact;
+}
+
 const ContactInfo = {
     props:['contact', 'contactIndex', 'editContactCb', 'deleteContactCb'],
     data() {
@@ -576,6 +1086,9 @@ const ContactInfo = {
 <div class="row">
     <div class="col-auto flex-fill fw-medium">{{ contact.name }}</div>
     <div class="col-auto">
+        <sbo-qr-button v-if="contact.jwks" v-bind:item-data="contact.jwks" label=""
+            v-bind:title="(contact.name || 'Contact') + ' public key'"></sbo-qr-button>
+
         <button type="button" v-on:click="editContact()" class="btn btn-sm btn-outline-light">
             <img src="img/pencil.svg" border="0">
         </button>
@@ -629,6 +1142,32 @@ const DecryptForm = {
             if (!this.packageJson.trim()) return null;
             try { JSON.parse(this.packageJson); return null; }
             catch { return 'Not valid JSON.'; }
+        },
+        /**
+         * Explains what the input is when it is valid JSON but not an encrypted package,
+         * e.g. a public key scanned on the wrong screen. Null if there is nothing to explain.
+         */
+        packageKindError() {
+            if (!this.packageJson.trim() || this.jsonError || this.parsedPackage) return null;
+            let p;
+            try {
+                p = JSON.parse(this.packageJson);
+            } catch {
+                return null;
+            }
+            if (p && p.type === 'sbo-pbkdf-encrypted') {
+                return 'This is a password-encrypted message. Open it in Password Enc. → Decrypt a message.';
+            }
+            if (p && Array.isArray(p.keys)) {
+                return 'This is a public key, not an encrypted package. Add it as a contact in the Contacts tab.';
+            }
+            if (p && p.jwks && p.salt && p.iv) {
+                return 'This is a keyset file. Load it in the My Keys tab.';
+            }
+            if (p && typeof p.jwks === 'string') {
+                return 'This is a contact, not an encrypted package. Import it in the Contacts tab.';
+            }
+            return 'This is not an SBOsecure encrypted package.';
         },
         packageInfo() {
             const p = this.parsedPackage;
@@ -810,6 +1349,14 @@ const DecryptForm = {
             this.packageJson = '';
             this.selectedFile = null;
             this.resetResult();
+        },
+        /**
+         * Takes a package read from QR codes and shows it in the paste box,
+         * so it goes through the same checks as pasted text.
+         */
+        onPackageScanned(text) {
+            this.packageJson = text;
+            this.inputMode = 'paste';
         },
         encryptDecryptedText() {
             this.$emit('encrypt-with-text', this.decryptedText);
@@ -1038,19 +1585,30 @@ const DecryptForm = {
         <button type="button" class="btn btn-sm"
             v-bind:class="inputMode==='file' ? 'btn-primary' : 'btn-outline-secondary'"
             v-on:click="inputMode='file'">Load file</button>
+        <button type="button" class="btn btn-sm"
+            v-bind:class="inputMode==='qr' ? 'btn-primary' : 'btn-outline-secondary'"
+            v-on:click="inputMode='qr'"><i class="bi bi-qr-code-scan me-1"></i>Scan QR</button>
     </div>
+</div>
+
+<div v-if="inputMode==='qr'" class="my-2">
+    <sbo-qr-scanner hint="Scan the QR code(s) of the encrypted package."
+        v-on:scanned="onPackageScanned"></sbo-qr-scanner>
 </div>
 
 <div v-if="inputMode==='paste'" class="my-2">
     <label class="form-label">Encrypted package (JSON)</label>
     <textarea v-model="packageJson" class="form-control font-monospace small" rows="6"
         placeholder="Paste the contents of a .sbo.json file here..."></textarea>
-    <div v-if="jsonError" class="form-text text-danger">{{ jsonError }}</div>
 </div>
 
 <div v-if="inputMode==='file'" class="my-2">
     <label class="form-label">Load encrypted file</label>
     <input type="file" accept=".json" class="form-control" v-on:change="onFileSelected">
+</div>
+
+<div v-if="jsonError || packageKindError" class="form-text text-danger mb-2">
+    <i class="bi bi-exclamation-circle me-1"></i>{{ jsonError || packageKindError }}
 </div>
 
 <div v-if="packageInfo" class="my-2 p-2 border rounded small text-secondary">
@@ -1502,6 +2060,8 @@ const EncryptForm = {
             <img src="img/download.svg" border="0"> Download
         </button>
         <button v-if="hasShareApi" type="button" class="btn btn-secondary" v-on:click="share">Share</button>
+        <sbo-qr-button v-bind:item-data="encryptedPackageJson" v-bind:title="encryptedFileName"
+            btn-class="btn btn-secondary" label="Show QR code"></sbo-qr-button>
     </div>
 </div>
 </div>`
@@ -1516,8 +2076,18 @@ const ContactForm = {
             keyInputMode: (this.contact && this.contact.jwks) ? 'paste' : 'file',
             loadedFileName: null,
             loadedJwks: null,       // the keys as loaded from loadedFileName, to detect later edits
-            loadError: null
+            loadError: null,
+            keyFingerprint: null,   // formatted fingerprint of the encryption key, for comparing with the contact
+            keysUnreadable: false   // keys are set but contain no usable encryption key
         };
+    },
+    watch: {
+        'contactInfo.jwks': {
+            immediate: true,
+            handler() {
+                this.updateFingerprint();
+            }
+        }
     },
     computed: {
         /**
@@ -1552,43 +2122,87 @@ const ContactForm = {
             this.saveContactCallback(null);
         },
         /**
-         * Accepts either:
-         *  - a public key set file  { keys: [...] }  (public.jwks.json from this app)
-         *  - a single contact file  { name, notes, jwks, ... }
-         * In the first case the jwks textarea is filled; in the second all fields are.
+         * Recomputes the fingerprint of the encryption key in the keys field.
          */
-        loadKeyFileSelected(event){
+        async updateFingerprint() {
+            const text = this.contactInfo.jwks;
+            let fingerprint = null;
+            let unreadable = false;
+            if (text) {
+                try {
+                    const jwks = JSON.parse(text);
+                    let encJwk = null;
+                    for (const k of (jwks.keys || [])) {
+                        if (k.key_ops && k.key_ops.includes('encrypt')) {
+                            encJwk = k;
+                            break;
+                        }
+                    }
+                    fingerprint = SBO_CryptoUtils.formatFingerprint(await SBO_CryptoUtils.jwkThumbprint(encJwk));
+                } catch {
+                    unreadable = true;
+                }
+            }
+            // Ignore the result if the keys changed while hashing
+            if (text === this.contactInfo.jwks) {
+                this.keyFingerprint = fingerprint;
+                this.keysUnreadable = unreadable;
+            }
+        },
+        /**
+         * Applies key data from a file or QR code. Accepts either:
+         *  - a public key set  { keys: [...] }  (public.jwks.json from this app)
+         *  - a single contact  { name, notes, jwks, ... }
+         * In the first case only the keys field is filled; in the second all fields are.
+         * @param {string} text   the JSON text
+         * @param {string} source shown to the user, e.g. the file name
+         * @returns {boolean} true if keys were loaded
+         */
+        applyKeyText(text, source){
             this.loadError = null;
             this.loadedFileName = null;
             this.loadedJwks = null;
+            let parsed;
+            try {
+                parsed = JSON.parse(text);
+            } catch {
+                this.loadError = 'Could not read the data as JSON.';
+                return false;
+            }
+            if (parsed && Array.isArray(parsed.keys)) {
+                this.contactInfo.jwks = text;
+                this.markKeysLoaded(source);
+                return true;
+            }
+            // The data may come from anyone (e.g. a scanned QR code): take only known, well-typed fields
+            const contact = SBO_SanitizeContact(parsed);
+            if (contact) {
+                if (contact.name !== undefined) this.contactInfo.name = contact.name;
+                if (contact.notes !== undefined) this.contactInfo.notes = contact.notes;
+                if (contact.jwks) {
+                    this.contactInfo.jwks = contact.jwks;
+                    this.markKeysLoaded(source);
+                    return true;
+                }
+                this.loadError = 'This contact has no public keys. Name and notes were filled in; ' +
+                    'load or paste the public keys separately.';
+                return false;
+            }
+            this.loadError = 'Unrecognised format. Expected a public.jwks.json or a saved contact.';
+            return false;
+        },
+        loadKeyFileSelected(event){
             const file = event.target.files[0];
             if (!file) return;
             const reader = new FileReader();
             reader.onload = (e) => {
-                try {
-                    const parsed = JSON.parse(e.target.result);
-                    if (Array.isArray(parsed.keys)) {
-                        // It's a public.jwks.json — populate the keys field only
-                        this.contactInfo.jwks = e.target.result;
-                        this.markKeysLoaded(file.name);
-                    } else if (parsed.name !== undefined || parsed.jwks !== undefined) {
-                        // It's a saved contact file — populate all fields
-                        Object.assign(this.contactInfo, parsed);
-                        if (parsed.jwks) {
-                            this.markKeysLoaded(file.name);
-                        } else {
-                            this.loadError = 'This contact file has no public keys. Name and notes were filled in; ' +
-                                'load or paste the public keys separately.';
-                        }
-                    } else {
-                        this.loadError = 'Unrecognised file format.';
-                    }
-                } catch {
-                    this.loadError = 'Could not parse file as JSON.';
-                }
+                this.applyKeyText(e.target.result, file.name);
                 event.target.value = '';
             };
             reader.readAsText(file);
+        },
+        onKeysScanned(text){
+            this.applyKeyText(text, 'QR code');
         },
     },
     template:`<div>
@@ -1606,18 +2220,15 @@ const ContactForm = {
                 <button type="button" class="btn btn-sm"
                     v-bind:class="keyInputMode==='paste' ? 'btn-primary' : 'btn-outline-secondary'"
                     v-on:click="keyInputMode='paste'">Paste</button>
+                <button type="button" class="btn btn-sm"
+                    v-bind:class="keyInputMode==='qr' ? 'btn-primary' : 'btn-outline-secondary'"
+                    v-on:click="keyInputMode='qr'"><i class="bi bi-qr-code-scan me-1"></i>Scan QR</button>
             </div>
         </div>
 
         <div v-if="keyInputMode==='file'">
             <input class="form-control" type="file" accept=".json" v-on:change="loadKeyFileSelected">
             <div class="form-text">Select the <strong>public.jwks.json</strong> your contact gave you, or a previously saved contact file (this also fills in name and notes).</div>
-            <div v-if="keysLoadedFrom" class="form-text text-success">
-                <i class="bi bi-check-circle-fill me-1"></i>Keys loaded from {{ keysLoadedFrom }}
-            </div>
-            <div v-else-if="contactInfo.jwks" class="form-text text-secondary">
-                <i class="bi bi-key me-1"></i>Keys already set. Loading a file replaces them.
-            </div>
         </div>
 
         <div v-if="keyInputMode==='paste'">
@@ -1625,7 +2236,30 @@ const ContactForm = {
             <div class="form-text">Paste the contents of <strong>public.jwks.json</strong>.</div>
         </div>
 
+        <div v-if="keyInputMode==='qr'">
+            <sbo-qr-scanner hint="Scan the public key QR code your contact shows you."
+                v-on:scanned="onKeysScanned"></sbo-qr-scanner>
+        </div>
+
+        <template v-if="keyInputMode !== 'paste'">
+            <div v-if="keysLoadedFrom" class="form-text text-success">
+                <i class="bi bi-check-circle-fill me-1"></i>Keys loaded from {{ keysLoadedFrom }}
+            </div>
+            <div v-else-if="contactInfo.jwks" class="form-text text-secondary">
+                <i class="bi bi-key me-1"></i>Keys already set. Loading new ones replaces them.
+            </div>
+        </template>
+
         <div v-if="loadError" class="form-text text-danger">{{ loadError }}</div>
+
+        <div v-if="keyFingerprint" class="form-text">
+            <i class="bi bi-fingerprint me-1"></i>Encryption key fingerprint:
+            <span class="font-monospace text-body">{{ keyFingerprint }}</span><br>
+            Ask your contact to check that it matches the fingerprint under <strong>My Keys</strong> on their device.
+        </div>
+        <div v-else-if="keysUnreadable" class="form-text text-danger">
+            These keys contain no usable encryption key. Check that you loaded a public.jwks.json from SBOsecure.
+        </div>
     </div>
     <div class="mb-2 text-center">
         <button type="button" v-on:click="cancelEdit" class="btn btn-sm btn-secondary me-2">Cancel</button>

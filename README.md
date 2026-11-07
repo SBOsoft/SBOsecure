@@ -56,6 +56,28 @@ No keys required. Go to **Password Enc.** to encrypt or decrypt text with just a
 
 ---
 
+## QR codes
+
+Public keys, encrypted packages and password-encrypted messages can be shown as QR codes (**QR code** next to Download) and read back with **Scan QR**, from the camera or from images. Large data is split over several codes, which can be scanned in any order. Scanning a contact's public key face to face, then comparing the key fingerprints, is the safest way to add a contact.
+
+**Limits**
+
+- About 800 bytes per code. A public key fits in 1 code, a short signed message in 2–3.
+- Nothing over 10 KB is offered as QR codes (most encrypted files). Use Download instead.
+- Your keyset is never offered as a QR code.
+
+**Device differences**
+
+- Chrome/Edge on Android, macOS and ChromeOS use the browser's built-in QR reader, which finds several codes in one image.
+- Everywhere else (Windows, Linux, Firefox, Safari/iOS) the bundled [jsQR](webapp/DocumentRoot/vendor/README.md) reader is used. It finds one code per image and can be slower.
+- Laptop webcams are front-facing and often low resolution: hold the code close so it fills most of the picture.
+- Chrome and Edge on Windows can't read iPhone HEIC photos. Use screenshots or JPEG/PNG.
+- The camera needs HTTPS and the user's permission. It turns off when the user leaves the scanning screen or the page is hidden.
+
+**Privacy:** a QR code is a copy of the data, visible to anyone who can see or photograph it. That is fine for public keys and encrypted packages, but recipient names and file names in a package are readable without decryption, and a password-encrypted message is only as strong as its password. Camera frames and images are processed on the device only.
+
+---
+
 ## Important notes
 
 | | |

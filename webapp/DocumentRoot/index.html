@@ -58,6 +58,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
     </script>
     <script src="crypto.js"></script>
     <script src="crypto-utils.js"></script>
+    <script src="vendor/qrcodegen/qrcodegen.js"></script>
+    <script src="qr-utils.js"></script>
     <script src="ui.js"></script>
 </head>
 <body>
@@ -164,13 +166,18 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                                 <div class="sbo-key-meta">
                                     Created {{ printKeyCreated(akey.downloadable.created) }}
                                 </div>
+                                <div v-if="akey.fingerprint" class="sbo-key-meta">
+                                    <i class="bi bi-fingerprint me-1"></i>Fingerprint
+                                    <span class="font-monospace">{{ akey.fingerprint }}</span>
+                                </div>
                                 <div class="sbo-key-downloads">
                                     <div class="d-inline-block">
                                     <span class="sbo-key-dl-label">Public key</span>
                                     <sbo-down-item
                                         v-bind:item-data="JSON.stringify(akey.jwks.public)"
                                         file-name="public.jwks.json"
-                                        mime-type="application/json">
+                                        mime-type="application/json"
+                                        v-bind:allow-qr="true">
                                     </sbo-down-item>
                                     </div>
                                     <div class="d-inline-block">
@@ -429,13 +436,15 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             <section id="doc-keys" class="sbo-doc-section"
                 v-bind:class="{current: docSectionForTab() === 'doc-keys'}">
                 <h5><i class="bi bi-key me-1"></i> My Keys</h5>
+                <h6>Create new key</h6>
                 <p>
-                    <h6>Create new key:</h6> enter a name, a password and an iterations number
+                    Enter a name, a password and an iterations number
                     (600,000–1,000,000). Then <strong>download the keyset file straight away</strong>.
                     Keys are lost when the page is closed.
                 </p>
+                <h6>Load key</h6>
                 <p>
-                    <h6>Load key:</h6> at the start of each session, pick your keyset file and enter
+                    At the start of each session, pick your keyset file and enter
                     the same password and number (the "secret number").
                 </p>
                 <p>
@@ -452,7 +461,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 <h5><i class="bi bi-people-fill me-1"></i> Contacts</h5>
                 <p>
                     A contact is a name plus that person's public key. Click <strong>Add</strong> and load
-                    their <code>public.jwks.json</code>, or paste its contents.
+                    their <code>public.jwks.json</code>, paste its contents, or <strong>Scan QR</strong>
+                    from their screen or a photo.
+                </p>
+                <p>
+                    After adding, compare the <strong>fingerprint</strong> shown under the keys with the one
+                    your contact sees under My Keys. If they match, you have the right key. Scanning
+                    the QR code face to face is the easiest way to be sure.
                 </p>
                 <p>
                     Contacts are only kept while the page is open. Use <strong>Download all</strong> to save
@@ -470,8 +485,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 <ol>
                     <li>Type a message or choose a file.</li>
                     <li>Tick one or more recipients from your contacts.</li>
-                    <li>Click <strong>Encrypt</strong>, then download or share the <code>.sbo.json</code> file.</li>
+                    <li>Click <strong>Encrypt</strong>, then download or share the <code>.sbo.json</code> file,
+                        or click <strong>Show QR code</strong> so the recipient can scan it.</li>
                 </ol>
+                <p>
+                    Short messages fit in a few QR codes. Packages over 10 KB (for example most files)
+                    can only be downloaded.
+                </p>
                 <p>
                     If your keys are loaded, the package is signed. Recipients who have you as a contact
                     will see that it was signed by you.
@@ -487,7 +507,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 <h5><i class="bi bi-unlock-fill me-1"></i> Decrypt</h5>
                 <ol>
                     <li>Load your keys in My Keys first.</li>
-                    <li>Paste the package content or load the <code>.sbo.json</code> file.</li>
+                    <li>Paste the package content, load the <code>.sbo.json</code> file, or
+                        <strong>Scan QR</strong> with the camera or from images. Parts can be scanned in any order.</li>
                     <li>Click <strong>Decrypt</strong>. Text is shown on screen; files can be saved.</li>
                 </ol>
                 <p class="mb-1">The signature badge tells you about the sender:</p>
@@ -511,8 +532,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 <h5><i class="bi bi-asterisk me-1"></i> Password Enc.</h5>
                 <p>
                     Encrypts text with just a password, so no keys or contacts are needed.
-                    The recipient needs the package file, the password <em>and</em> the iterations number.
-                    Tell them the password some other way than the file, e.g. by phone.
+                    The recipient needs the package (file or QR code), the password <em>and</em> the
+                    iterations number. Tell them the password some other way than the package, e.g. by phone.
                 </p>
             </section>
 
@@ -525,11 +546,58 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 </p>
             </section>
 
+            <section id="doc-qr" class="sbo-doc-section">
+                <h5><i class="bi bi-qr-code me-1"></i> QR codes</h5>
+                <p>
+                    Public keys, encrypted packages and password-encrypted messages can be shown as
+                    QR codes and scanned on another device. Look for <strong>QR code</strong> next to
+                    Download, and <strong>Scan QR</strong> where you load data.
+                </p>
+                <h6>Showing codes</h6>
+                <ul>
+                    <li>Each code holds about 800 bytes. A public key needs 1 code, a short signed message 2–3,
+                        and each extra recipient adds roughly half a code.</li>
+                    <li>Data over 10 KB (most encrypted files) can't be shown as QR codes. Use Download.</li>
+                    <li>For several codes, use <strong>One at a time</strong> → <strong>Play</strong> to let
+                        another device's camera pick them up, or <strong>Save image</strong> to send them as pictures.</li>
+                </ul>
+                <h6>Scanning</h6>
+                <ul>
+                    <li>With <strong>Use camera</strong> codes are read automatically; no button press is needed.
+                        Codes can be scanned in any order and the camera turns off when all are read.</li>
+                    <li><strong>Choose image(s)</strong> reads screenshots or photos of codes.</li>
+                    <li>The camera needs HTTPS and your permission. It turns off as soon as you switch to
+                        another screen in SBOsecure, another browser tab or another app; start it again when you return.</li>
+                </ul>
+                <h6>Differences between devices</h6>
+                <ul>
+                    <li><strong>Chrome/Edge on Android, macOS and ChromeOS</strong> have a built-in QR reader:
+                        fast, and it finds several codes in one image.</li>
+                    <li><strong>Windows, Linux, Firefox and Safari (including iPhone)</strong> use the reader bundled
+                        with SBOsecure. It finds only <em>one code per image</em>, so save or photograph each code
+                        separately, and it can be slower on older computers.</li>
+                    <li><strong>Laptop webcams</strong> are front-facing and often low resolution. Hold the phone
+                        15–25 cm away so the code fills most of the picture, turn its brightness up and avoid glare.</li>
+                    <li><strong>iPhone HEIC photos</strong> can't be read by Chrome or Edge on Windows. Use a screenshot,
+                        or export the photo as JPEG/PNG. Choosing a photo directly on the iPhone works.</li>
+                </ul>
+                <h6>Privacy</h6>
+                <ul>
+                    <li>Anyone who sees or photographs a code gets a copy of its data, exactly like a copy of the file.</li>
+                    <li>Encrypted packages show recipient names and the original file name without decryption.</li>
+                    <li>A password-encrypted message is only as safe as its password once its codes are photographed.</li>
+                    <li>Your keyset is never offered as a QR code. Images and camera frames never leave your device.</li>
+                </ul>
+            </section>
+
             <section id="doc-notes" class="sbo-doc-section">
                 <h5><i class="bi bi-info-circle me-1"></i> Good to know</h5>
                 <ul>
                     <li>Refreshing or closing the page clears loaded keys and contacts. Save your files.</li>
-                    <li>Keep your keyset file as safe as a password-manager file.</li>
+                    <li>Keep your keyset file as safe as a password-manager file. It is never offered as a
+                        QR code, so it can't end up in someone's photos.</li>
+                    <li>QR codes contain the same data as the file. See <strong>QR codes</strong> above for
+                        limits and device differences.</li>
                     <li>Uses your browser's built-in Web Crypto: AES-256-GCM, RSA-OAEP, RSASSA-PKCS1-v1_5 and PBKDF2-SHA-256.</li>
                 </ul>
             </section>
@@ -627,12 +695,28 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
             showKeysTab() { this.switchActiveTab('keys'); },
             showMainTab() { this.switchActiveTab('encrypt'); },
             handleMyKeysLoaded(keysAsEncrypted, keysAsJwks) {
-                this.myKeys.push({ downloadable: keysAsEncrypted, jwks: keysAsJwks });
+                this.addMyKey(keysAsEncrypted, keysAsJwks);
                 this.switchActiveTab('keys');
             },
             handleMyNewKeysCreated(keysAsEncrypted, keysAsJwks) {
-                this.myKeys.push({ downloadable: keysAsEncrypted, jwks: keysAsJwks });
+                this.addMyKey(keysAsEncrypted, keysAsJwks);
                 this.switchActiveTab('keys');
+            },
+            /**
+             * Adds a key set to myKeys and fills in the fingerprint of its encryption key,
+             * which contacts compare with what they see after importing the public key.
+             */
+            async addMyKey(keysAsEncrypted, keysAsJwks) {
+                this.myKeys.push({ downloadable: keysAsEncrypted, jwks: keysAsJwks, fingerprint: null });
+                const entry = this.myKeys[this.myKeys.length - 1];
+                for (const k of keysAsJwks.public.keys) {
+                    if (k.key_ops && k.key_ops.includes('encrypt')) {
+                        try {
+                            entry.fingerprint = SBO_CryptoUtils.formatFingerprint(await SBO_CryptoUtils.jwkThumbprint(k));
+                        } catch { /* leave it empty for a malformed key */ }
+                        break;
+                    }
+                }
             },
             printKeyCreated(ts) {
                 return SBO_FormatTimestampSeconds(ts);
@@ -674,13 +758,22 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                         const parsed = JSON.parse(e.target.result);
                         const contacts = Array.isArray(parsed) ? parsed : [parsed];
                         let added = 0;
+                        let skipped = 0;
                         for (const c of contacts) {
-                            if (c && (c.name || c.jwks)) {
-                                this.myContacts.push(c);
+                            // Only known, well-typed fields are kept; see SBO_SanitizeContact
+                            const contact = SBO_SanitizeContact(c);
+                            if (contact) {
+                                this.myContacts.push(contact);
                                 added++;
+                            } else if (c !== null) {
+                                skipped++;
                             }
                         }
-                        if (added === 0) alert('No valid contacts found in file.');
+                        if (added === 0) {
+                            alert('No valid contacts found in file.');
+                        } else if (skipped > 0) {
+                            alert(`Imported ${added} contact(s). Skipped ${skipped} invalid entr${skipped === 1 ? 'y' : 'ies'}.`);
+                        }
                     } catch {
                         alert('Could not parse contacts file.');
                     }
@@ -700,6 +793,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
     app.component('sbo-contact-form',       ContactForm);
     app.component('sbo-encrypt-form',       EncryptForm);
     app.component('sbo-decrypt-form',       DecryptForm);
+    app.component('sbo-qr-button',          QrDisplayButton);
+    app.component('sbo-qr-scanner',         QrScanner);
 
     app.mount('#app');
 </script>

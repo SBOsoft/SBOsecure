@@ -211,6 +211,35 @@ body {
     margin-bottom: 12px;
 }
 
+/* ── QR codes ───────────────────────────────────────────── */
+.sbo-qr-img {
+    width: 100%;
+    max-width: 280px;
+    height: auto;
+    image-rendering: pixelated;     /* keep module edges sharp when scaled */
+    border: 1px solid var(--c-outline);
+    border-radius: var(--r-xs);
+    background: #fff;
+}
+
+.sbo-qr-img-lg {
+    max-width: min(440px, 100%);
+}
+
+.sbo-qr-video {
+    display: block;
+    width: 100%;
+    max-width: 420px;
+    border-radius: var(--r-sm);
+    background: #000;
+    margin-bottom: 8px;
+}
+
+/* Front cameras feel natural only when mirrored. Display only: decoding reads the raw frames. */
+.sbo-qr-video-mirrored {
+    transform: scaleX(-1);
+}
+
 /* ── Material tabs navigation ───────────────────────────── */
 .sbo-nav {
     /*position: sticky;
