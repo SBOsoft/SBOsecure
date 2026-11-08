@@ -60,10 +60,17 @@ No keys required. Go to **Password Enc.** to encrypt or decrypt text with just a
 
 Public keys, encrypted packages and password-encrypted messages can be shown as QR codes (**QR code** next to Download) and read back with **Scan QR**, from the camera or from images. Large data is split over several codes, which can be scanned in any order. Scanning a contact's public key face to face, then comparing the key fingerprints, is the safest way to add a contact.
 
+**Compact codes**
+
+Data is packed in a compact binary form (Base45 text, which QR codes store at 5.5 bits per character) instead of JSON. Scanning rebuilds exactly the original JSON, so signatures still verify; anything that can't be represented exactly is shown as JSON codes instead, and every set of codes is decoded again before it is displayed.
+
+- A public key fits in 1 code and carries the key's name (up to 100 characters), which pre-fills the contact name when scanned.
+- A short signed message usually fits in 1 code; each extra recipient adds about a third of a code.
+- For signed messages the sender's public key is left out by default, which saves about a quarter. The recipient then checks the signature against their contacts; tick **Include my public key** for recipients who don't have the sender as a contact.
+
 **Limits**
 
-- About 800 bytes per code. A public key fits in 1 code, a short signed message in 2–3.
-- Nothing over 10 KB is offered as QR codes (most encrypted files). Use Download instead.
+- At most 13 codes, enough for about 10 KB of content. Larger data (most encrypted files) can only be downloaded.
 - Your keyset is never offered as a QR code.
 
 **Device differences**

@@ -56,6 +56,33 @@ class SBO_QR {
 
     static PART_PATTERN = /^SBOQR1\/([0-9a-f]{8})\/(\d{1,3})\/(\d{1,3})\//;
 
+    /*
+     * Compact format: SBOQR2/<ID>/<part>/<total>/<Base45 of a slice of SBO_QRCompact bytes>
+     * The whole code uses only QR alphanumeric characters (stored at 5.5 bits each). ID is the
+     * first 8 hex digits (upper case) of the SHA-256 of the complete compact bytes.
+     */
+    static COMPACT_PREFIX = 'SBOQR2';
+    static COMPACT_PART_PATTERN = /^SBOQR2\/([0-9A-F]{8})\/(\d{1,3})\/(\d{1,3})\//;
+    /** Bytes per compact code: gives at most a version 23 code, the same density as JSON codes */
+    static COMPACT_CHUNK_BYTES = 816;
+    /** QR alphanumeric character set; Base45 uses exactly these characters */
+    static ALPHANUMERIC_PATTERN = /^[0-9A-Z $%*+\-./:]*$/;
+    /** More codes than this are not offered for display */
+    static MAX_DISPLAY_PARTS = 13;
+    /** Longest name put in a public key code; longer names are cut, so they cannot inflate the codes */
+    static MAX_NAME_CHARS = 100;
+
+    /**
+     * Cuts a name to MAX_NAME_CHARS characters, counting whole characters (code points), so an
+     * emoji or other character outside the BMP is never split in half.
+     * @returns {string|undefined} undefined for an empty or missing name
+     */
+    static limitName(name) {
+        if (typeof name !== 'string' || name.length === 0) return undefined;
+        const chars = Array.from(name);
+        return chars.length > SBO_QR.MAX_NAME_CHARS ? chars.slice(0, SBO_QR.MAX_NAME_CHARS).join('') : name;
+    }
+
     /**
      * UTF-8 size of a string in bytes.
      */
@@ -158,22 +185,126 @@ class SBO_QR {
     }
 
     /**
-     * Parses one scanned part. Returns null if the text has no SBOQR1 header.
-     * Throws if the header is present but invalid.
-     * @returns {{id: string, index: number, total: number, data: string} | null}
+     * Parses one scanned part. Returns null if the text has no SBOsecure header.
+     * Throws if the header is present but invalid, or from an unknown (newer) format.
+     * @returns {{format: 'json'|'compact', id: string, index: number, total: number, data: string} | null}
      */
     static parsePart(text) {
-        const m = SBO_QR.PART_PATTERN.exec(text);
-        if (!m) {
-            if (text.startsWith(SBO_QR.PREFIX + '/')) throw new Error('Unreadable SBOsecure QR code header.');
+        let format;
+        let m;
+        if (text.startsWith(SBO_QR.PREFIX + '/')) {
+            format = 'json';
+            m = SBO_QR.PART_PATTERN.exec(text);
+        } else if (text.startsWith(SBO_QR.COMPACT_PREFIX + '/')) {
+            format = 'compact';
+            m = SBO_QR.COMPACT_PART_PATTERN.exec(text);
+        } else if (/^SBOQR\d+\//.test(text)) {
+            throw new Error('This QR code was made by a newer version of SBOsecure.');
+        } else {
             return null;
         }
+        if (!m) throw new Error('Unreadable SBOsecure QR code header.');
         const index = Number(m[2]);
         const total = Number(m[3]);
         if (total < 1 || index < 1 || index > total) {
             throw new Error('Invalid part number in QR code.');
         }
-        return { id: m[1], index: index, total: total, data: text.slice(m[0].length) };
+        const data = text.slice(m[0].length);
+        if (format === 'compact' && !SBO_QR.ALPHANUMERIC_PATTERN.test(data)) {
+            throw new Error('Damaged QR data (invalid character).');
+        }
+        return { format: format, id: m[1], index: index, total: total, data: data };
+    }
+
+    /**
+     * Identifier of compact data: first 8 hex digits (upper case) of its SHA-256.
+     */
+    static async compactId(bytes) {
+        const hash = await crypto.subtle.digest('SHA-256', bytes);
+        return SBO_CryptoUtils.hexEncode(new Uint8Array(hash)).slice(0, 8).toUpperCase();
+    }
+
+    /**
+     * Splits compact bytes into SBOQR2 part strings of roughly equal size.
+     * Every slice except the last has an even number of bytes, so each part's Base45 text ends on a
+     * complete 3-character group. Such a group never ends in a space (its last character is at most
+     * 'W'), and the final 2-character group ends in a digit, so a reader that trims trailing spaces
+     * can never cut off data.
+     * @param {Uint8Array} bytes
+     * @returns {Promise<string[]>}
+     */
+    static async splitCompact(bytes) {
+        const count = Math.max(1, Math.ceil(bytes.length / SBO_QR.COMPACT_CHUNK_BYTES));
+        let size = Math.ceil(bytes.length / count);
+        if (size % 2 === 1) size++;
+        const slices = [];
+        for (let offset = 0; offset < bytes.length; offset += size) {
+            slices.push(bytes.slice(offset, offset + size));
+        }
+        const id = await SBO_QR.compactId(bytes);
+        const parts = [];
+        for (let i = 0; i < slices.length; i++) {
+            parts.push(`${SBO_QR.COMPACT_PREFIX}/${id}/${i + 1}/${slices.length}/${SBO_Base45.encode(slices[i])}`);
+        }
+        return parts;
+    }
+
+    /**
+     * Decodes parts again exactly as a receiver would (in reverse order, to also exercise
+     * any-order assembly) and returns the reassembled text, or null if that fails.
+     */
+    static async readBack(parts) {
+        try {
+            const asm = new SBO_QRAssembler();
+            for (let i = parts.length - 1; i >= 0; i--) asm.add(parts[i]);
+            return await asm.result();
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Prepares data for display as QR codes.
+     * Uses the compact format (SBOQR2) when the data can be represented exactly, otherwise the JSON
+     * format (SBOQR1). Either way the codes are decoded again before they are returned and must
+     * reproduce the data, so codes that would not read back correctly are never shown.
+     * @param {string} text the data (JSON)
+     * @param {{name?: string, includeSignerKey?: boolean}} options see SBO_QRCompact.encode
+     * @returns {Promise<{parts: string[], compact: boolean, signerKeyLeftOut: boolean, signerKeyOptional: boolean}>}
+     * @throws {Error} with a message for the user if the data is too large or cannot be encoded
+     */
+    static async encodeForDisplay(text, options = {}) {
+        if (!text) throw new Error('There is nothing to show.');
+        // Cap the name once, so encoding and the read-back check below use the same value
+        options = Object.assign({}, options, { name: SBO_QR.limitName(options.name) });
+        const tooLarge = () => new Error(`This data needs more than ${SBO_QR.MAX_DISPLAY_PARTS} QR codes. Use Download instead.`);
+
+        const compact = await SBO_QRCompact.encode(text, options);
+        if (compact) {
+            const parts = await SBO_QR.splitCompact(compact.bytes);
+            let ok = true;
+            for (const part of parts) {
+                if (!SBO_QR.ALPHANUMERIC_PATTERN.test(part)) ok = false;
+            }
+            const decoded = ok ? await SBO_QR.readBack(parts) : null;
+            if (decoded !== null && await SBO_QRCompact.matchesOriginal(text, decoded, options)) {
+                if (parts.length > SBO_QR.MAX_DISPLAY_PARTS) throw tooLarge();
+                return {
+                    parts: parts,
+                    compact: true,
+                    signerKeyLeftOut: compact.signerKeyLeftOut,
+                    signerKeyOptional: compact.signerKeyOptional
+                };
+            }
+            console.warn('Compact QR encoding did not read back exactly; using the JSON format.');
+        }
+
+        if (!SBO_QR.canDisplay(text)) throw tooLarge();
+        const parts = await SBO_QR.split(text);
+        const decoded = await SBO_QR.readBack(parts);
+        if (decoded !== SBO_QR.toAsciiSafe(text)) throw new Error('This data cannot be shown as QR codes.');
+        if (parts.length > SBO_QR.MAX_DISPLAY_PARTS) throw tooLarge();
+        return { parts: parts, compact: false, signerKeyLeftOut: false, signerKeyOptional: false };
     }
 
     /**
@@ -483,6 +614,583 @@ class SBO_QR {
 }
 
 /**
+ * Base45 (RFC 9285): 2 bytes become 3 characters, all from the QR alphanumeric character set.
+ * Such text is stored in alphanumeric mode (5.5 bits per character, about 97% efficient) and
+ * every QR reader returns it as plain text, unlike raw binary.
+ */
+class SBO_Base45 {
+    static ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:';
+
+    /**
+     * @param {Uint8Array} bytes
+     * @returns {string}
+     */
+    static encode(bytes) {
+        const A = SBO_Base45.ALPHABET;
+        let out = '';
+        let i = 0;
+        for (; i + 1 < bytes.length; i += 2) {
+            const n = bytes[i] * 256 + bytes[i + 1];
+            const c = n % 45;
+            const d = Math.floor(n / 45) % 45;
+            const e = Math.floor(n / 2025);
+            out += A[c] + A[d] + A[e];
+        }
+        if (i < bytes.length) {
+            const n = bytes[i];
+            out += A[n % 45] + A[Math.floor(n / 45)];
+        }
+        return out;
+    }
+
+    /**
+     * @param {string} text
+     * @returns {Uint8Array}
+     * @throws {Error} for characters outside the alphabet or impossible values
+     */
+    static decode(text) {
+        if (text.length % 3 === 1) throw new Error('Damaged QR data (invalid length).');
+        const out = new Uint8Array(Math.floor(text.length / 3) * 2 + (text.length % 3 === 2 ? 1 : 0));
+        let o = 0;
+        for (let i = 0; i < text.length; i += 3) {
+            const c = SBO_Base45.valueAt(text, i);
+            const d = SBO_Base45.valueAt(text, i + 1);
+            if (i + 2 < text.length) {
+                const n = c + d * 45 + SBO_Base45.valueAt(text, i + 2) * 2025;
+                if (n > 0xffff) throw new Error('Damaged QR data (invalid value).');
+                out[o++] = n >> 8;
+                out[o++] = n & 0xff;
+            } else {
+                const n = c + d * 45;
+                if (n > 0xff) throw new Error('Damaged QR data (invalid value).');
+                out[o++] = n;
+            }
+        }
+        return out;
+    }
+
+    static valueAt(text, i) {
+        const v = SBO_Base45.ALPHABET.indexOf(text[i]);
+        if (v < 0) throw new Error('Damaged QR data (invalid character).');
+        return v;
+    }
+}
+
+/**
+ * Writes the compact binary layout. Lengths are unsigned LEB128 varints.
+ */
+class SBO_ByteWriter {
+    constructor() {
+        this.bytes = [];
+    }
+    u8(v) {
+        this.bytes.push(v & 0xff);
+    }
+    varint(v) {
+        if (!Number.isInteger(v) || v < 0 || v > 0x0fffffff) throw new Error('Value out of range.');
+        do {
+            let b = v & 0x7f;
+            v = Math.floor(v / 128);
+            if (v > 0) b |= 0x80;
+            this.bytes.push(b);
+        } while (v > 0);
+    }
+    raw(bytes) {
+        for (const b of bytes) this.bytes.push(b);
+    }
+    blob(bytes) {
+        this.varint(bytes.length);
+        this.raw(bytes);
+    }
+    str(text) {
+        this.blob(new TextEncoder().encode(text));
+    }
+    toBytes() {
+        return new Uint8Array(this.bytes);
+    }
+}
+
+/**
+ * Reads the compact binary layout. Scanned data is untrusted: every read is bounds-checked and
+ * strings must be valid UTF-8.
+ */
+class SBO_ByteReader {
+    constructor(bytes) {
+        this.bytes = bytes;
+        this.pos = 0;
+    }
+    need(n) {
+        if (this.pos + n > this.bytes.length) throw new Error('Damaged QR data (too short).');
+    }
+    u8() {
+        this.need(1);
+        return this.bytes[this.pos++];
+    }
+    varint() {
+        let v = 0;
+        let factor = 1;
+        for (let i = 0; i < 4; i++) {
+            const b = this.u8();
+            v += (b & 0x7f) * factor;
+            if (!(b & 0x80)) return v;
+            factor *= 128;
+        }
+        throw new Error('Damaged QR data (invalid length).');
+    }
+    raw(n) {
+        this.need(n);
+        const out = this.bytes.slice(this.pos, this.pos + n);
+        this.pos += n;
+        return out;
+    }
+    blob() {
+        return this.raw(this.varint());
+    }
+    str() {
+        try {
+            return new TextDecoder('utf-8', { fatal: true }).decode(this.blob());
+        } catch (err) {
+            if (err.message.startsWith('Damaged')) throw err;
+            throw new Error('Damaged QR data (invalid text).');
+        }
+    }
+    end() {
+        if (this.pos !== this.bytes.length) throw new Error('Damaged QR data (unexpected extra data).');
+    }
+}
+
+/**
+ * Lossless compact binary form of the JSON that SBOsecure shows as QR codes: public keys,
+ * encrypted packages and password-encrypted packages. Base64 becomes raw bytes, field names
+ * disappear, and values that are always the same (RSA exponent, algorithms) are left out.
+ *
+ * decode(encode(json)) rebuilds the original JSON, with the same field order, so the package
+ * signature (computed over JSON.stringify of the parsed package) still verifies. encode() refuses
+ * (returns null) anything it cannot represent exactly, and SBO_QR.encodeForDisplay() additionally
+ * decodes every result again before showing it; such data is shown in the JSON format instead.
+ *
+ * Optionally, a signed package can leave out the signer's public key and carry only the first
+ * 8 bytes of its fingerprint (signerKeyRef); the receiver then verifies with the matching key
+ * from their contacts.
+ *
+ * Layout (all types): type u8, layout version u8, flags u8, then type-specific fields.
+ * The tables below are part of the format: never reorder them, only append.
+ */
+class SBO_QRCompact {
+    static TYPE_PUBLIC_KEY = 1;
+    static TYPE_PACKAGE = 2;
+    static TYPE_PASSWORD_PACKAGE = 3;
+    static LAYOUT_VERSION = 1;
+    static SIGNER_REF_BYTES = 8;
+    static MAX_RECIPIENTS = 100;
+    static MAX_KEYS = 8;
+
+    /** Content types stored as a 1-byte code (code = index + 1; 0 = stored as text) */
+    static CONTENT_TYPES = ['text/plain', 'application/octet-stream'];
+
+    /** The two kinds of RSA public key the app creates, as exported by Web Crypto (in export order) */
+    static KEY_KINDS = {
+        1: { key_ops: ['verify'], alg: 'RS256' },
+        2: { key_ops: ['encrypt'], alg: 'RSA-OAEP-256' }
+    };
+
+    /* ---- Helpers ------------------------------------------------------ */
+
+    /** Thrown internally when data cannot be represented exactly; encode() then returns null */
+    static notCompactable(reason) {
+        const err = new Error('Not compactable: ' + reason);
+        err.notCompactable = true;
+        return err;
+    }
+
+    static keysOf(obj) {
+        return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? Object.keys(obj) : null;
+    }
+
+    static sameList(a, b) {
+        if (!a || a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) {
+            if (a[i] !== b[i]) return false;
+        }
+        return true;
+    }
+
+    /** Standard padded base64 to bytes, only if re-encoding gives back exactly the same text */
+    static base64ToBytes(text) {
+        if (typeof text !== 'string' || text.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(text)) {
+            throw SBO_QRCompact.notCompactable('invalid base64');
+        }
+        const b64 = new SBO_Base64(false);
+        const bytes = b64.decodeAsByteArray(text);
+        if (b64.encodeBytes(bytes) !== text) throw SBO_QRCompact.notCompactable('non-canonical base64');
+        return bytes;
+    }
+
+    static bytesToBase64(bytes) {
+        return new SBO_Base64(false).encodeBytes(bytes);
+    }
+
+    /** Unpadded base64url (as used in JWKs) to bytes, only if re-encoding gives back the same text */
+    static base64UrlToBytes(text) {
+        if (typeof text !== 'string' || !/^[A-Za-z0-9_-]*$/.test(text) || text.length % 4 === 1) {
+            throw SBO_QRCompact.notCompactable('invalid base64url');
+        }
+        const padded = text + '='.repeat((4 - (text.length % 4)) % 4);
+        const bytes = new SBO_Base64(true).decodeAsByteArray(padded);
+        if (SBO_QRCompact.bytesToBase64Url(bytes) !== text) throw SBO_QRCompact.notCompactable('non-canonical base64url');
+        return bytes;
+    }
+
+    static bytesToBase64Url(bytes) {
+        return new SBO_Base64(true).encodeBytes(bytes).replace(/=+$/, '');
+    }
+
+    static hexToBytes(hex) {
+        const bytes = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+        return bytes;
+    }
+
+    /** Sorted-key JSON, to compare data where member order does not matter (public keys) */
+    static canonicalJson(value) {
+        if (Array.isArray(value)) {
+            const items = [];
+            for (const v of value) items.push(SBO_QRCompact.canonicalJson(v));
+            return '[' + items.join(',') + ']';
+        }
+        if (value && typeof value === 'object') {
+            const members = [];
+            for (const k of Object.keys(value).sort()) {
+                members.push(JSON.stringify(k) + ':' + SBO_QRCompact.canonicalJson(value[k]));
+            }
+            return '{' + members.join(',') + '}';
+        }
+        return JSON.stringify(value);
+    }
+
+    /**
+     * Writes an RSA public JWK of the given kind as its modulus only.
+     * Refuses keys with any member that is not exactly what the app exports.
+     */
+    static writeRsaKey(w, jwk, kind) {
+        const spec = SBO_QRCompact.KEY_KINDS[kind];
+        const keys = SBO_QRCompact.keysOf(jwk);
+        if (!keys || keys.length !== 6 || jwk.kty !== 'RSA' || jwk.e !== 'AQAB' || jwk.ext !== true ||
+            jwk.alg !== spec.alg || !SBO_QRCompact.sameList(jwk.key_ops, spec.key_ops)) {
+            throw SBO_QRCompact.notCompactable('unexpected key format');
+        }
+        w.blob(SBO_QRCompact.base64UrlToBytes(jwk.n));
+    }
+
+    static readRsaKey(r, kind) {
+        const spec = SBO_QRCompact.KEY_KINDS[kind];
+        const n = r.blob();
+        if (n.length < 128 || n.length > 1024) throw new Error('Damaged QR data (invalid key).');
+        return {
+            key_ops: spec.key_ops.slice(),
+            ext: true,
+            alg: spec.alg,
+            kty: 'RSA',
+            n: SBO_QRCompact.bytesToBase64Url(n),
+            e: 'AQAB'
+        };
+    }
+
+    static kindOfKey(jwk) {
+        for (const kind of Object.keys(SBO_QRCompact.KEY_KINDS)) {
+            if (jwk && SBO_QRCompact.sameList(jwk.key_ops, SBO_QRCompact.KEY_KINDS[kind].key_ops)) return Number(kind);
+        }
+        throw SBO_QRCompact.notCompactable('unknown key type');
+    }
+
+    /* ---- Encoding ----------------------------------------------------- */
+
+    /**
+     * Encodes JSON text compactly.
+     * @param {string} text
+     * @param {{name?: string, includeSignerKey?: boolean}} options
+     *        name: key name to put in a public key code; includeSignerKey: keep the signer's
+     *        public key in a signed package instead of a fingerprint reference
+     * @returns {Promise<{bytes: Uint8Array, signerKeyLeftOut: boolean, signerKeyOptional: boolean} | null>}
+     *          null if the data cannot be represented exactly
+     */
+    static async encode(text, options = {}) {
+        let obj;
+        try {
+            obj = JSON.parse(text);
+        } catch {
+            return null;
+        }
+        try {
+            const w = new SBO_ByteWriter();
+            const keys = SBO_QRCompact.keysOf(obj);
+            if (SBO_QRCompact.sameList(keys, ['keys'])) {
+                SBO_QRCompact.encodePublicKey(w, obj, options.name);
+                return { bytes: w.toBytes(), signerKeyLeftOut: false, signerKeyOptional: false };
+            }
+            if (obj && obj.type === 'sbo-encrypted') {
+                const signed = !!obj.signature;
+                const leaveOut = signed && !options.includeSignerKey;
+                await SBO_QRCompact.encodePackage(w, obj, leaveOut);
+                return { bytes: w.toBytes(), signerKeyLeftOut: leaveOut, signerKeyOptional: signed };
+            }
+            if (obj && obj.type === 'sbo-pbkdf-encrypted') {
+                SBO_QRCompact.encodePasswordPackage(w, obj);
+                return { bytes: w.toBytes(), signerKeyLeftOut: false, signerKeyOptional: false };
+            }
+            return null;
+        } catch (err) {
+            if (err.notCompactable) return null;
+            throw err;
+        }
+    }
+
+    static encodePublicKey(w, jwks, name) {
+        if (!Array.isArray(jwks.keys) || jwks.keys.length === 0 || jwks.keys.length > SBO_QRCompact.MAX_KEYS) {
+            throw SBO_QRCompact.notCompactable('unexpected key list');
+        }
+        const hasName = typeof name === 'string' && name.length > 0;
+        w.u8(SBO_QRCompact.TYPE_PUBLIC_KEY);
+        w.u8(SBO_QRCompact.LAYOUT_VERSION);
+        w.u8(hasName ? 1 : 0);
+        if (hasName) w.str(name);
+        w.varint(jwks.keys.length);
+        for (const jwk of jwks.keys) {
+            const kind = SBO_QRCompact.kindOfKey(jwk);
+            w.u8(kind);
+            SBO_QRCompact.writeRsaKey(w, jwk, kind);
+        }
+    }
+
+    static async encodePackage(w, p, leaveOutSignerKey) {
+        if (!SBO_QRCompact.sameList(SBO_QRCompact.keysOf(p),
+            ['version', 'type', 'encryptedContent', 'encryptedKeys', 'signature', 'signerPublicKey']) || p.version !== 1) {
+            throw SBO_QRCompact.notCompactable('unexpected package fields');
+        }
+        const ec = p.encryptedContent;
+        const ecKeys = SBO_QRCompact.keysOf(ec);
+        const hasName = !!ecKeys && ecKeys.includes('originalName');
+        const hasType = !!ecKeys && ecKeys.includes('contentType');
+        const expectedEcKeys = ['ciphertext', 'iv'];
+        if (hasName) expectedEcKeys.push('originalName');
+        if (hasType) expectedEcKeys.push('contentType');
+        if (!SBO_QRCompact.sameList(ecKeys, expectedEcKeys) ||
+            (hasName && typeof ec.originalName !== 'string') || (hasType && typeof ec.contentType !== 'string')) {
+            throw SBO_QRCompact.notCompactable('unexpected content fields');
+        }
+
+        const entries = p.encryptedKeys;
+        if (!Array.isArray(entries) || entries.length === 0 || entries.length > SBO_QRCompact.MAX_RECIPIENTS) {
+            throw SBO_QRCompact.notCompactable('unexpected recipients');
+        }
+        // All recipient entries must have the same shape: with keyId (current) or without (older versions)
+        const hasKeyIds = SBO_QRCompact.sameList(SBO_QRCompact.keysOf(entries[0]), ['recipientName', 'keyId', 'encryptedKey']);
+        const entryKeys = hasKeyIds ? ['recipientName', 'keyId', 'encryptedKey'] : ['recipientName', 'encryptedKey'];
+        for (const entry of entries) {
+            if (!SBO_QRCompact.sameList(SBO_QRCompact.keysOf(entry), entryKeys) || typeof entry.recipientName !== 'string' ||
+                (hasKeyIds && !/^[0-9a-f]{64}$/.test(entry.keyId))) {
+                throw SBO_QRCompact.notCompactable('unexpected recipient entry');
+            }
+        }
+
+        const signed = p.signature !== null || p.signerPublicKey !== null;
+        if (signed && (typeof p.signature !== 'string' || !p.signerPublicKey)) {
+            throw SBO_QRCompact.notCompactable('incomplete signature');
+        }
+        const byRef = signed && leaveOutSignerKey;
+
+        const flags = (hasName ? 1 : 0) | (hasType ? 2 : 0) | (hasKeyIds ? 4 : 0) | (signed ? 8 : 0) | (byRef ? 16 : 0);
+        w.u8(SBO_QRCompact.TYPE_PACKAGE);
+        w.u8(SBO_QRCompact.LAYOUT_VERSION);
+        w.u8(flags);
+        w.blob(SBO_QRCompact.base64ToBytes(ec.ciphertext));
+        w.blob(SBO_QRCompact.base64ToBytes(ec.iv));
+        if (hasName) w.str(ec.originalName);
+        if (hasType) {
+            const code = SBO_QRCompact.CONTENT_TYPES.indexOf(ec.contentType);
+            w.u8(code + 1);
+            if (code < 0) w.str(ec.contentType);
+        }
+        w.varint(entries.length);
+        for (const entry of entries) {
+            w.str(entry.recipientName);
+            if (hasKeyIds) w.raw(SBO_QRCompact.hexToBytes(entry.keyId));
+            w.blob(SBO_QRCompact.base64ToBytes(entry.encryptedKey));
+        }
+        if (signed) {
+            w.blob(SBO_QRCompact.base64ToBytes(p.signature));
+            if (byRef) {
+                let thumb;
+                try {
+                    thumb = await SBO_CryptoUtils.jwkThumbprint(p.signerPublicKey);
+                } catch {
+                    throw SBO_QRCompact.notCompactable('malformed signer key');
+                }
+                w.raw(SBO_QRCompact.hexToBytes(thumb.slice(0, SBO_QRCompact.SIGNER_REF_BYTES * 2)));
+            } else {
+                SBO_QRCompact.writeRsaKey(w, p.signerPublicKey, 1);
+            }
+        }
+    }
+
+    static encodePasswordPackage(w, p) {
+        if (!SBO_QRCompact.sameList(SBO_QRCompact.keysOf(p), ['version', 'type', 'encryptedContent', 'pbkdf']) || p.version !== 1 ||
+            !SBO_QRCompact.sameList(SBO_QRCompact.keysOf(p.encryptedContent), ['ciphertext', 'iv']) ||
+            !SBO_QRCompact.sameList(SBO_QRCompact.keysOf(p.pbkdf), ['salt'])) {
+            throw SBO_QRCompact.notCompactable('unexpected password package fields');
+        }
+        w.u8(SBO_QRCompact.TYPE_PASSWORD_PACKAGE);
+        w.u8(SBO_QRCompact.LAYOUT_VERSION);
+        w.u8(0);
+        w.blob(SBO_QRCompact.base64ToBytes(p.encryptedContent.ciphertext));
+        w.blob(SBO_QRCompact.base64ToBytes(p.encryptedContent.iv));
+        w.blob(SBO_QRCompact.base64ToBytes(p.pbkdf.salt));
+    }
+
+    /* ---- Decoding ----------------------------------------------------- */
+
+    /**
+     * Rebuilds the JSON text from compact bytes.
+     *  - public key: the public.jwks.json text, or {"name":…,"jwks":"…"} when a name was included
+     *  - package: the package JSON; with a left-out signer key, signerPublicKey is null and
+     *    signerKeyRef holds the fingerprint prefix (16 hex digits)
+     *  - password package: the package JSON
+     * @param {Uint8Array} bytes
+     * @returns {string}
+     * @throws {Error} for damaged or unsupported data
+     */
+    static decode(bytes) {
+        const r = new SBO_ByteReader(bytes);
+        const type = r.u8();
+        const layout = r.u8();
+        if (layout !== SBO_QRCompact.LAYOUT_VERSION) {
+            throw new Error('This QR code was made by a newer version of SBOsecure.');
+        }
+        let text;
+        if (type === SBO_QRCompact.TYPE_PUBLIC_KEY) {
+            text = SBO_QRCompact.decodePublicKey(r);
+        } else if (type === SBO_QRCompact.TYPE_PACKAGE) {
+            text = SBO_QRCompact.decodePackage(r);
+        } else if (type === SBO_QRCompact.TYPE_PASSWORD_PACKAGE) {
+            text = SBO_QRCompact.decodePasswordPackage(r);
+        } else {
+            throw new Error('This QR code was made by a newer version of SBOsecure.');
+        }
+        r.end();
+        return text;
+    }
+
+    static decodePublicKey(r) {
+        const flags = r.u8();
+        if (flags & ~1) throw new Error('This QR code was made by a newer version of SBOsecure.');
+        const name = (flags & 1) ? r.str() : null;
+        const count = r.varint();
+        if (count === 0 || count > SBO_QRCompact.MAX_KEYS) throw new Error('Damaged QR data (invalid key count).');
+        const keys = [];
+        for (let i = 0; i < count; i++) {
+            const kind = r.u8();
+            if (!SBO_QRCompact.KEY_KINDS[kind]) throw new Error('Damaged QR data (unknown key type).');
+            keys.push(SBO_QRCompact.readRsaKey(r, kind));
+        }
+        const jwksText = JSON.stringify({ keys: keys });
+        return name !== null ? JSON.stringify({ name: name, jwks: jwksText }) : jwksText;
+    }
+
+    static decodePackage(r) {
+        const flags = r.u8();
+        if (flags & ~31) throw new Error('This QR code was made by a newer version of SBOsecure.');
+        const hasName = !!(flags & 1), hasType = !!(flags & 2), hasKeyIds = !!(flags & 4);
+        const signed = !!(flags & 8), byRef = !!(flags & 16);
+        if (byRef && !signed) throw new Error('Damaged QR data (invalid flags).');
+
+        const ec = {
+            ciphertext: SBO_QRCompact.bytesToBase64(r.blob()),
+            iv: SBO_QRCompact.bytesToBase64(r.blob())
+        };
+        if (hasName) ec.originalName = r.str();
+        if (hasType) {
+            const code = r.u8();
+            if (code === 0) {
+                ec.contentType = r.str();
+            } else if (code <= SBO_QRCompact.CONTENT_TYPES.length) {
+                ec.contentType = SBO_QRCompact.CONTENT_TYPES[code - 1];
+            } else {
+                throw new Error('This QR code was made by a newer version of SBOsecure.');
+            }
+        }
+        const count = r.varint();
+        if (count === 0 || count > SBO_QRCompact.MAX_RECIPIENTS) throw new Error('Damaged QR data (invalid recipient count).');
+        const entries = [];
+        for (let i = 0; i < count; i++) {
+            const entry = { recipientName: r.str() };
+            if (hasKeyIds) entry.keyId = SBO_CryptoUtils.hexEncode(r.raw(32));
+            entry.encryptedKey = SBO_QRCompact.bytesToBase64(r.blob());
+            entries.push(entry);
+        }
+        const pkg = {
+            version: 1,
+            type: 'sbo-encrypted',
+            encryptedContent: ec,
+            encryptedKeys: entries,
+            signature: null,
+            signerPublicKey: null
+        };
+        if (signed) {
+            pkg.signature = SBO_QRCompact.bytesToBase64(r.blob());
+            if (byRef) {
+                pkg.signerKeyRef = SBO_CryptoUtils.hexEncode(r.raw(SBO_QRCompact.SIGNER_REF_BYTES));
+            } else {
+                pkg.signerPublicKey = SBO_QRCompact.readRsaKey(r, 1);
+            }
+        }
+        return JSON.stringify(pkg);
+    }
+
+    static decodePasswordPackage(r) {
+        const flags = r.u8();
+        if (flags !== 0) throw new Error('This QR code was made by a newer version of SBOsecure.');
+        return JSON.stringify({
+            version: 1,
+            type: 'sbo-pbkdf-encrypted',
+            encryptedContent: {
+                ciphertext: SBO_QRCompact.bytesToBase64(r.blob()),
+                iv: SBO_QRCompact.bytesToBase64(r.blob())
+            },
+            pbkdf: { salt: SBO_QRCompact.bytesToBase64(r.blob()) }
+        });
+    }
+
+    /**
+     * True if decoded compact data represents exactly the original JSON, given the options it
+     * was encoded with. Packages must match character for character, so signatures still verify.
+     */
+    static async matchesOriginal(originalText, decodedText, options = {}) {
+        let original, decoded;
+        try {
+            original = JSON.parse(originalText);
+            decoded = JSON.parse(decodedText);
+        } catch {
+            return false;
+        }
+        if (SBO_QRCompact.sameList(SBO_QRCompact.keysOf(original), ['keys'])) {
+            let jwks = decoded;
+            const hasName = typeof options.name === 'string' && options.name.length > 0;
+            if (hasName) {
+                if (!decoded || decoded.name !== options.name || typeof decoded.jwks !== 'string') return false;
+                jwks = JSON.parse(decoded.jwks);
+            }
+            return SBO_QRCompact.canonicalJson(jwks) === SBO_QRCompact.canonicalJson(original);
+        }
+        if (original && original.type === 'sbo-encrypted' && original.signature && !options.includeSignerKey) {
+            const ref = (await SBO_CryptoUtils.jwkThumbprint(original.signerPublicKey)).slice(0, SBO_QRCompact.SIGNER_REF_BYTES * 2);
+            const expected = Object.assign({}, original, { signerPublicKey: null, signerKeyRef: ref });
+            return JSON.stringify(decoded) === JSON.stringify(expected);
+        }
+        return JSON.stringify(decoded) === JSON.stringify(original);
+    }
+}
+
+/**
  * Collects scanned QR parts, in any order, until a set is complete.
  * Scanned text is untrusted: part counts and total size are limited, and the
  * reassembled data must match the id in the part headers.
@@ -494,6 +1202,7 @@ class SBO_QRAssembler {
 
     reset() {
         this.id = null;
+        this.format = null;     // 'json' (SBOQR1) or 'compact' (SBOQR2)
         this.total = 0;
         this.parts = new Map();
         this.bytes = 0;
@@ -533,8 +1242,9 @@ class SBO_QRAssembler {
         }
         if (this.id === null) {
             this.id = part.id;
+            this.format = part.format;
             this.total = part.total;
-        } else if (part.id !== this.id) {
+        } else if (part.id !== this.id || part.format !== this.format) {
             throw new Error('This QR code belongs to a different set. Scan the remaining parts or start over.');
         } else if (part.total !== this.total) {
             throw new Error('This QR code has an inconsistent part count. Start over.');
@@ -550,8 +1260,9 @@ class SBO_QRAssembler {
     }
 
     /**
-     * Returns the reassembled data once complete.
-     * @throws {Error} if parts are missing or the data does not match its id
+     * Returns the reassembled data once complete. Compact (SBOQR2) data is decoded back to the
+     * same JSON text the sender had, so callers never need to know which format was scanned.
+     * @throws {Error} if parts are missing, the data does not match its id, or it is damaged
      */
     async result() {
         if (!this.isComplete()) throw new Error('Not all parts have been scanned yet.');
@@ -561,10 +1272,16 @@ class SBO_QRAssembler {
         for (let i = 1; i <= this.total; i++) {
             text += this.parts.get(i);
         }
-        const id = await SBO_QR.dataId(text);
-        if (id !== this.id) {
-            throw new Error('The scanned parts do not fit together (checksum mismatch). Start over.');
+        const mismatch = () => new Error('The scanned parts do not fit together (checksum mismatch). Start over.');
+
+        if (this.format === 'compact') {
+            // Each part ends on a complete Base45 group, so the joined text is the Base45 of all bytes
+            const bytes = SBO_Base45.decode(text);
+            if (await SBO_QR.compactId(bytes) !== this.id) throw mismatch();
+            return SBO_QRCompact.decode(bytes);
         }
+
+        if (await SBO_QR.dataId(text) !== this.id) throw mismatch();
         return text;
     }
 }
@@ -572,3 +1289,5 @@ class SBO_QRAssembler {
 // Expose classes on globalThis, as crypto-utils.js does, so tests running in a VM can reach them
 globalThis.SBO_QR          = SBO_QR;
 globalThis.SBO_QRAssembler = SBO_QRAssembler;
+globalThis.SBO_QRCompact   = SBO_QRCompact;
+globalThis.SBO_Base45      = SBO_Base45;

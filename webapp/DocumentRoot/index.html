@@ -177,7 +177,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                                         v-bind:item-data="JSON.stringify(akey.jwks.public)"
                                         file-name="public.jwks.json"
                                         mime-type="application/json"
-                                        v-bind:allow-qr="true">
+                                        v-bind:allow-qr="true"
+                                        v-bind:qr-name="akey.downloadable.name">
                                     </sbo-down-item>
                                     </div>
                                     <div class="d-inline-block">
@@ -518,6 +519,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                     <li><strong>Valid, signer not in your contacts</strong>: anyone can sign a package,
                         so you can't tell who sent it. Add the sender as a contact using their public
                         key to confirm it.</li>
+                    <li><strong>Signed, but the signer is not in your contacts</strong>: shown for QR codes
+                        that left out the sender's public key. Add the sender as a contact to check the signature.</li>
                     <li><strong>Invalid</strong>: the package was modified. Don't trust it.</li>
                     <li><strong>No signature</strong>: you can't tell who sent it.</li>
                 </ul>
@@ -555,9 +558,15 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
                 </p>
                 <h6>Showing codes</h6>
                 <ul>
-                    <li>Each code holds about 800 bytes. A public key needs 1 code, a short signed message 2–3,
-                        and each extra recipient adds roughly half a code.</li>
-                    <li>Data over 10 KB (most encrypted files) can't be shown as QR codes. Use Download.</li>
+                    <li>Data is packed compactly. A public key fits in 1 code, a short signed message usually
+                        in 1, and each extra recipient adds about a third of a code.</li>
+                    <li>A public key code also carries the key's name, so the person scanning it gets the
+                        contact name filled in. They can change it.</li>
+                    <li>For a signed message, your public key is left out to keep the codes small. The
+                        recipient can then check your signature only if they have you as a contact. Tick
+                        <strong>Include my public key</strong> if they don't.</li>
+                    <li>At most 13 codes are shown, enough for about 10 KB of content. Larger data
+                        (most encrypted files) can only be downloaded.</li>
                     <li>For several codes, use <strong>One at a time</strong> → <strong>Play</strong> to let
                         another device's camera pick them up, or <strong>Save image</strong> to send them as pictures.</li>
                 </ul>

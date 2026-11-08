@@ -19,7 +19,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const DownloadableItem = {
     // allowQr: also offer a "QR code" button. Never set it for private data such as keysets.
-    props: ['fileName', 'mimeType', 'itemData', 'dataType', 'allowQr'],
+    // qrName: name to include in the QR code of a public key
+    props: ['fileName', 'mimeType', 'itemData', 'dataType', 'allowQr', 'qrName'],
     methods:{
         download() {
             SBO_SaveAsFile(this.itemData, this.fileName, this.mimeType || 'application/octet-stream');
@@ -37,7 +38,8 @@ const DownloadableItem = {
         <img src="img/download.svg" border="0">
         Download
     </button>
-    <sbo-qr-button v-if="allowQr" v-bind:item-data="itemData" v-bind:title="fileName"></sbo-qr-button>
+    <sbo-qr-button v-if="allowQr" v-bind:item-data="itemData" v-bind:title="fileName"
+        v-bind:qr-name="qrName"></sbo-qr-button>
 </div>`
 };
 
@@ -51,7 +53,8 @@ let SBO_QrButtonCounter = 0;
  */
 const QrDisplayButton = {
     // label: button text; pass "" for an icon-only button. btnClass: classes of the button.
-    props: ['itemData', 'title', 'btnClass', 'label'],
+    // qrName: name to put in a public key code, so the scanning side can fill in the contact name.
+    props: ['itemData', 'title', 'btnClass', 'label', 'qrName'],
     data() {
         return {
             uid: 'sboQr' + (++SBO_QrButtonCounter),
@@ -60,13 +63,13 @@ const QrDisplayButton = {
             error: null,
             view: 'grid',       // 'grid' | 'single'
             current: 0,
-            playTimer: null
+            playTimer: null,
+            includeSignerKey: false,    // signed packages leave out the sender's public key by default
+            signerKeyOptional: false,   // the data is a signed package, so the option above applies
+            generateRun: 0
         };
     },
     computed: {
-        sizeKb() {
-            return (SBO_QR.encodedLength(this.itemData || '') / 1024).toFixed(1);
-        },
         buttonLabel() {
             return this.label !== undefined ? this.label : 'QR code';
         }
@@ -94,23 +97,41 @@ const QrDisplayButton = {
             el.addEventListener('hidden.bs.modal', this.onHidden, { once: true });
             bootstrap.Modal.getOrCreateInstance(el).show();
 
+            this.includeSignerKey = false;
+            await this.generate();
+        },
+        /**
+         * Creates the codes for the current options. Called on open and when an option changes.
+         */
+        async generate() {
+            const run = ++this.generateRun;     // only the latest run may update the codes
+            this.stopPlaying();
+            this.error = null;
+            this.codes = [];
+            this.current = 0;
             try {
-                if (!this.itemData) throw new Error('There is nothing to show.');
-                if (!SBO_QR.canDisplay(this.itemData)) {
-                    throw new Error(`This data is ${this.sizeKb} KB. QR codes are only offered up to ` +
-                        `${SBO_QR.MAX_DISPLAY_BYTES / 1024} KB; use Download instead.`);
-                }
-                const parts = await SBO_QR.split(this.itemData);
+                // encodeForDisplay caps the name at SBO_QR.MAX_NAME_CHARS characters
+                const shown = await SBO_QR.encodeForDisplay(this.itemData, {
+                    name: this.qrName || undefined,
+                    includeSignerKey: this.includeSignerKey
+                });
+                if (run !== this.generateRun) return;
                 const codes = [];
-                for (const part of parts) {
+                for (const part of shown.parts) {
                     const qr = Vue.markRaw(SBO_QR.encode(part));   // large immutable object, keep it out of reactivity
                     codes.push({ qr: qr, url: SBO_QR.toSvgDataUrl(qr) });
                 }
+                this.signerKeyOptional = shown.signerKeyOptional;
                 this.codes = codes;
             } catch (err) {
+                if (run !== this.generateRun) return;
                 console.error('QR generation failed:', err);
                 this.error = err.message || 'Could not create QR codes.';
             }
+        },
+        toggleSignerKey() {
+            this.includeSignerKey = !this.includeSignerKey;
+            this.generate();
         },
         onHidden() {
             this.stopPlaying();
@@ -171,6 +192,17 @@ const QrDisplayButton = {
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
     </div>
     <div class="modal-body">
+        <div v-if="signerKeyOptional" class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" v-bind:id="uid + 'SignerKey'"
+                v-bind:checked="includeSignerKey" v-on:change="toggleSignerKey">
+            <label class="form-check-label small" v-bind:for="uid + 'SignerKey'">
+                Include my public key (larger codes)
+            </label>
+            <div class="form-text mt-0">
+                <span v-if="includeSignerKey">Anyone can check the signature, but only a matching contact proves it is from you.</span>
+                <span v-else>Smaller codes. The recipient can check your signature only if they have you as a contact.</span>
+            </div>
+        </div>
         <div v-if="error" class="alert alert-warning mb-0">{{ error }}</div>
         <div v-else-if="codes.length === 0" class="text-secondary">Creating QR codes…</div>
         <template v-else>
@@ -1087,7 +1119,7 @@ const ContactInfo = {
     <div class="col-auto flex-fill fw-medium">{{ contact.name }}</div>
     <div class="col-auto">
         <sbo-qr-button v-if="contact.jwks" v-bind:item-data="contact.jwks" label=""
-            v-bind:title="(contact.name || 'Contact') + ' public key'"></sbo-qr-button>
+            v-bind:title="(contact.name || 'Contact') + ' public key'" v-bind:qr-name="contact.name"></sbo-qr-button>
 
         <button type="button" v-on:click="editContact()" class="btn btn-sm btn-outline-light">
             <img src="img/pencil.svg" border="0">
@@ -1125,7 +1157,8 @@ const DecryptForm = {
             decryptedFileName: null,
             decryptedContentType: null,
             signatureStatus: null,  // null | 'valid' | 'invalid' | 'unsigned' | 'error'
-            signer: null            // who signed a valid package, see identifySigner()
+            signer: null,           // who signed a valid package, see identifySigner()
+            verifyRun: 0            // number of the latest signature check, see verifySignature()
         };
     },
     computed: {
@@ -1165,7 +1198,7 @@ const DecryptForm = {
                 return 'This is a keyset file. Load it in the My Keys tab.';
             }
             if (p && typeof p.jwks === 'string') {
-                return 'This is a contact, not an encrypted package. Import it in the Contacts tab.';
+                return 'This is a contact\'s public key, not an encrypted package. Add it in the Contacts tab.';
             }
             return 'This is not an SBOsecure encrypted package.';
         },
@@ -1175,7 +1208,7 @@ const DecryptForm = {
             return {
                 recipients: (p.encryptedKeys || []).map(k => k.recipientName).join(', '),
                 originalName: p.encryptedContent && p.encryptedContent.originalName,
-                signed: !!p.signerPublicKey
+                signed: !!p.signature
             };
         },
         canDecrypt() {
@@ -1195,28 +1228,107 @@ const DecryptForm = {
                 this.noMatchingKey = false;
                 this.decryptError = null;
             }
-            this.refreshSigner();
+            this.reverifySignature();
         },
-        // Adding or editing a contact can change who a valid signature is attributed to
+        // Adding or editing a contact can change who signed a package, or make a left-out
+        // signer key available, so the signature is checked again
         myContacts: {
             deep: true,
             handler() {
-                this.refreshSigner();
+                this.reverifySignature();
             }
         }
     },
     methods: {
         /**
-         * Re-identifies the signer of the current valid package against the current keys and contacts.
+         * Finds the signer's public key. Normally it is embedded in the package. Compact QR codes
+         * may leave it out and carry signerKeyRef instead (the first 16 hex digits of its
+         * fingerprint); the key is then looked up among the loaded keys and contacts.
+         * A wrong key cannot make a forged signature valid: verification simply fails.
+         * @returns {Promise<JsonWebKey|null>}
          */
-        async refreshSigner() {
+        async resolveSignerKey(pkg) {
+            if (pkg.signerPublicKey) return pkg.signerPublicKey;
+            const ref = typeof pkg.signerKeyRef === 'string' ? pkg.signerKeyRef : '';
+            if (!/^[0-9a-f]{16}$/.test(ref)) return null;
+
+            const candidates = [];
+            for (const myKey of (this.myKeys || [])) {
+                const jwk = this.findJwkByOp(myKey.jwks.public.keys, 'verify');
+                if (jwk) candidates.push(jwk);
+            }
+            for (const contact of (this.myContacts || [])) {
+                if (!contact || !contact.jwks) continue;
+                try {
+                    const jwk = this.findJwkByOp(JSON.parse(contact.jwks).keys, 'verify');
+                    if (jwk) candidates.push(jwk);
+                } catch { /* unreadable contact keys */ }
+            }
+            for (const jwk of candidates) {
+                const thumb = await this.safeThumbprint(jwk);
+                if (thumb && thumb.startsWith(ref)) return jwk;
+            }
+            return null;
+        },
+        /**
+         * Checks the package signature and records who signed it.
+         * Sets signatureStatus to 'valid', 'invalid', 'error', 'unsigned', or 'unknown-signer'
+         * (signed, but the left-out signer key is not among the loaded keys and contacts).
+         *
+         * Checks can overlap (the decrypt itself, and re-checks when contacts or keys change). Each
+         * check gets a run number and only the latest one applies its result. Status and signer are
+         * computed first and applied together, so the badge never shows a half-updated state.
+         */
+        async verifySignature(pkg) {
+            const run = (this.verifyRun || 0) + 1;
+            this.verifyRun = run;
+
+            let status;
+            let signer = null;
+            const signerKey = pkg.signature ? await this.resolveSignerKey(pkg) : null;
+            if (!pkg.signature) {
+                status = 'unsigned';
+            } else if (!signerKey) {
+                status = pkg.signerKeyRef ? 'unknown-signer' : 'unsigned';
+            } else {
+                try {
+                    const payload = {
+                        version: pkg.version,
+                        type: pkg.type,
+                        encryptedContent: pkg.encryptedContent,
+                        encryptedKeys: pkg.encryptedKeys
+                    };
+                    const pkcs = new SBO_RSASSAPKCS1v15();
+                    const verifyKey = await pkcs.importVerificationPublicKey(signerKey);
+                    const sigBytes = new SBO_Base64(false).decodeAsByteArray(pkg.signature);
+                    const valid = await pkcs.verifySignature(verifyKey, sigBytes, JSON.stringify(payload));
+                    status = valid ? 'valid' : 'invalid';
+                } catch {
+                    status = 'error';
+                }
+                // An embedded signing key travels inside the package, so anyone can produce a "valid"
+                // signature. Only a match with a known key tells the user who actually signed it.
+                if (status === 'valid') {
+                    signer = this.identifySigner(
+                        await this.safeThumbprint(signerKey),
+                        await this.collectLoadedKeyFingerprints(),
+                        await this.collectContactFingerprints()
+                    );
+                }
+            }
+
+            // A newer check (or a reset for a different package) started while this one ran
+            if (run !== this.verifyRun) return;
+            this.signatureStatus = status;
+            this.signer = signer;
+        },
+        /**
+         * Checks the signature of the decrypted package again, e.g. after contacts changed.
+         */
+        async reverifySignature() {
             const pkg = this.parsedPackage;
-            if (this.signatureStatus !== 'valid' || !pkg) return;
-            this.signer = this.identifySigner(
-                await this.safeThumbprint(pkg.signerPublicKey),
-                await this.collectLoadedKeyFingerprints(),
-                await this.collectContactFingerprints()
-            );
+            if (!pkg || this.signatureStatus === null) return;
+            await this.verifySignature(pkg);
         },
         onFileSelected(event) {
             const file = event.target.files[0];
@@ -1237,6 +1349,8 @@ const DecryptForm = {
             this.decryptedContentType = null;
             this.signatureStatus = null;
             this.signer = null;
+            // A signature check still running for the previous package must not apply its result
+            this.verifyRun = (this.verifyRun || 0) + 1;
         },
         async decrypt() {
             this.resetResult();
@@ -1306,29 +1420,7 @@ const DecryptForm = {
                 }
                 this.decryptedFileName = pkg.encryptedContent.originalName || (isBinary ? 'decrypted-file' : 'decrypted.txt');
 
-                // Verify signature
-                if (!pkg.signature || !pkg.signerPublicKey) {
-                    this.signatureStatus = 'unsigned';
-                } else {
-                    try {
-                        const payload = {
-                            version: pkg.version,
-                            type: pkg.type,
-                            encryptedContent: pkg.encryptedContent,
-                            encryptedKeys: pkg.encryptedKeys
-                        };
-                        const pkcs = new SBO_RSASSAPKCS1v15();
-                        const verifyKey = await pkcs.importVerificationPublicKey(pkg.signerPublicKey);
-                        const sigBytes = b64.decodeAsByteArray(pkg.signature);
-                        const valid = await pkcs.verifySignature(verifyKey, sigBytes, JSON.stringify(payload));
-                        this.signatureStatus = valid ? 'valid' : 'invalid';
-                    } catch {
-                        this.signatureStatus = 'error';
-                    }
-                    // The signing key travels inside the package, so anyone can produce a "valid" signature.
-                    // Only a match with a known key tells the user who actually signed it.
-                    await this.refreshSigner();
-                }
+                await this.verifySignature(pkg);
 
             } catch (err) {
                 console.error('Decryption failed:', err);
@@ -1475,12 +1567,12 @@ const DecryptForm = {
                 });
             }
 
-            // Signer of the package
+            // Signer of the package (its key may be left out of compact QR codes, see resolveSignerKey)
             let signer = null;
-            if (pkg.signerPublicKey) {
-                signer = this.identifySigner(
-                    await this.safeThumbprint(pkg.signerPublicKey), loadedKeys, contacts
-                );
+            if (pkg.signature) {
+                const signerKey = await this.resolveSignerKey(pkg);
+                signer = this.identifySigner(await this.safeThumbprint(signerKey), loadedKeys, contacts);
+                signer.keyRef = (!signerKey && typeof pkg.signerKeyRef === 'string') ? pkg.signerKeyRef : null;
             }
 
             const hints = this.buildHints(loadedKeys, recipients, signer, anyRecipientMatches, legacyRecipients);
@@ -1668,6 +1760,14 @@ const DecryptForm = {
         <span v-if="signatureStatus === 'invalid'" class="badge bg-danger">Signature invalid — content may have been tampered</span>
         <span v-if="signatureStatus === 'error'"   class="badge bg-warning text-dark">Signature could not be verified</span>
         <span v-if="signatureStatus === 'unsigned'" class="badge bg-secondary">No signature</span>
+        <template v-if="signatureStatus === 'unknown-signer'">
+            <span class="badge bg-warning text-dark">Signed, but the signer is not in your contacts</span>
+            <div class="form-text">
+                This package was scanned from QR codes that leave out the sender's public key, so the
+                signature can only be checked against your contacts. Add the sender as a contact to check it.
+                <a href="#" v-on:click.prevent="showDetails">Show signer fingerprint</a>
+            </div>
+        </template>
     </div>
     <div v-if="decryptedBuffer !== null" class="alert alert-success d-flex align-items-center gap-3 flex-wrap">
         <i class="bi bi-check-circle-fill fs-5"></i>
@@ -1747,7 +1847,16 @@ const DecryptForm = {
             <tbody>
                 <tr>
                     <th class="w-25">Key fingerprint</th>
-                    <td class="font-monospace">{{ formatFingerprint(details.signer.keyId) || '—' }}</td>
+                    <td class="font-monospace">
+                        <span v-if="details.signer.keyId">{{ formatFingerprint(details.signer.keyId) }}</span>
+                        <template v-else-if="details.signer.keyRef">
+                            <span>{{ formatFingerprint(details.signer.keyRef) }} …</span>
+                            <div class="small text-secondary" style="font-family: var(--bs-body-font-family)">
+                                Only the start of the fingerprint: the key itself was left out of the QR codes.
+                            </div>
+                        </template>
+                        <span v-else>—</span>
+                    </td>
                 </tr>
                 <tr>
                     <th>Signer</th>
@@ -2154,11 +2263,13 @@ const ContactForm = {
          *  - a public key set  { keys: [...] }  (public.jwks.json from this app)
          *  - a single contact  { name, notes, jwks, ... }
          * In the first case only the keys field is filled; in the second all fields are.
+         * A scanned public key QR code arrives as the second form ({ name, jwks }) when it carries a name.
          * @param {string} text   the JSON text
          * @param {string} source shown to the user, e.g. the file name
+         * @param {boolean} keepName do not replace a name the user already typed
          * @returns {boolean} true if keys were loaded
          */
-        applyKeyText(text, source){
+        applyKeyText(text, source, keepName){
             this.loadError = null;
             this.loadedFileName = null;
             this.loadedJwks = null;
@@ -2177,7 +2288,9 @@ const ContactForm = {
             // The data may come from anyone (e.g. a scanned QR code): take only known, well-typed fields
             const contact = SBO_SanitizeContact(parsed);
             if (contact) {
-                if (contact.name !== undefined) this.contactInfo.name = contact.name;
+                if (contact.name !== undefined && !(keepName && this.contactInfo.name)) {
+                    this.contactInfo.name = contact.name;
+                }
                 if (contact.notes !== undefined) this.contactInfo.notes = contact.notes;
                 if (contact.jwks) {
                     this.contactInfo.jwks = contact.jwks;
@@ -2202,7 +2315,8 @@ const ContactForm = {
             reader.readAsText(file);
         },
         onKeysScanned(text){
-            this.applyKeyText(text, 'QR code');
+            // A name in the code (the key owner's own key name) only fills an empty name field
+            this.applyKeyText(text, 'QR code', true);
         },
     },
     template:`<div>
